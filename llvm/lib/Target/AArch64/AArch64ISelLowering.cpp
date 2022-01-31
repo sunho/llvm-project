@@ -14852,10 +14852,10 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
     }
 
     if (UserIID == Intrinsic::not_intrinsic) {
-      DCI.CombineTo(User, DAG.getNode(User->getOpcode(), SDLoc(User),
+      DCI.CombineTo(User, DAG.getNode(User->getOpcode(), dl,
                                       User->getValueType(0), UserLHS, UserRHS));
     } else {
-      DCI.CombineTo(User, DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
+      DCI.CombineTo(User, DAG.getNode(ISD::INTRINSIC_WO_CHAIN, dl,
                                       User->getValueType(0),
                                       User->getOperand(0), UserLHS, UserRHS));
     }
