@@ -14827,9 +14827,9 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
 
     SDLoc dl(User);
     MVT VT = OldDUP.getSimpleValueType();
-    SDValue LowExtracted = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT,
-                                       ExtracedDUP.getOperand(0),
-                                       DAG.getConstant(0, dl, MVT::i64));
+    SDValue LowExtracted =
+        DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT, ExtracedDUP.getOperand(0),
+                    DAG.getConstant(0, dl, MVT::i64));
 
     // Patch operands but skip patching when high version of long ops
     // can be selected.
@@ -14838,24 +14838,26 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
     SDValue UserRHS =
         User->getOperand((UserIID == Intrinsic::not_intrinsic) ? 1 : 2);
     if (UserLHS == OldDUP) {
-      if (isEssentiallyExtractHighSubvector(UserRHS) || !UserRHS.getValueType().is64BitVector()) {
+      if (isEssentiallyExtractHighSubvector(UserRHS) ||
+          !UserRHS.getValueType().is64BitVector()) {
         continue;
       }
       UserLHS = LowExtracted;
     } else {
-      if (isEssentiallyExtractHighSubvector(UserLHS) || !UserLHS.getValueType().is64BitVector()) {
+      if (isEssentiallyExtractHighSubvector(UserLHS) ||
+          !UserLHS.getValueType().is64BitVector()) {
         continue;
       }
       UserRHS = LowExtracted;
     }
 
     if (UserIID == Intrinsic::not_intrinsic) {
-        DCI.CombineTo(User, DAG.getNode(User->getOpcode(), SDLoc(User),
-            User->getValueType(0), UserLHS, UserRHS));
+      DCI.CombineTo(User, DAG.getNode(User->getOpcode(), SDLoc(User),
+                                      User->getValueType(0), UserLHS, UserRHS));
     } else {
-        DCI.CombineTo(User, DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
-                            User->getValueType(0), User->getOperand(0), UserLHS,
-                            UserRHS));
+      DCI.CombineTo(User, DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
+                                      User->getValueType(0),
+                                      User->getOperand(0), UserLHS, UserRHS));
     }
   }
 
