@@ -14783,14 +14783,88 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
   // Either node could be a DUP, but it's not worth doing both of them (you'd
   // just as well use the non-high version) so look for a corresponding extract
   // operation on the other "wing".
+  SDValue OldDUP;
+  SDValue ExtracedDUP;
   if (isEssentiallyExtractHighSubvector(LHS)) {
+    OldDUP = RHS;
     RHS = tryExtendDUPToExtractHigh(RHS, DAG);
     if (!RHS.getNode())
       return SDValue();
+    ExtracedDUP = RHS;
   } else if (isEssentiallyExtractHighSubvector(RHS)) {
+    OldDUP = LHS;
     LHS = tryExtendDUPToExtractHigh(LHS, DAG);
     if (!LHS.getNode())
       return SDValue();
+    ExtracedDUP = LHS;
+  } else {
+    return SDValue();
+  }
+
+  // After extending DUP, we can reuse the new extended DUP value
+  // in non-high version of long ops that have been using the old DUP value.
+  for (SDNode::use_iterator UI = OldDUP.getNode()->use_begin(),
+                            UE = OldDUP.getNode()->use_end();
+       UI != UE; ++UI) {
+    SDNode *User = *UI;
+    unsigned UserIID = getIntrinsicID(User);
+    // Skip irrelevant instruction types
+    if (User->getOpcode() != ISD::ABDU && User->getOpcode() != ISD::ABDS &&
+        User->getOpcode() != ISD::INTRINSIC_WO_CHAIN) {
+      continue;
+    }
+    if (User->getOpcode() == ISD::INTRINSIC_WO_CHAIN) {
+      switch (UserIID) {
+      case Intrinsic::aarch64_neon_smull:
+      case Intrinsic::aarch64_neon_umull:
+      case Intrinsic::aarch64_neon_pmull:
+      case Intrinsic::aarch64_neon_sqdmull:
+        break;
+      default:
+        continue;
+      }
+    }
+
+    SDLoc dl(User);
+    MVT NarrowTy = OldDUP.getSimpleValueType();
+    SDValue LowExtracted = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, NarrowTy,
+                                       ExtracedDUP.getOperand(0),
+                                       DAG.getConstant(0, dl, MVT::i64));
+
+    // Patch operands but skip patching when high version of long ops
+    // can be selected.
+    SDValue UserLHS =
+        User->getOperand((UserIID == Intrinsic::not_intrinsic) ? 0 : 1);
+    SDValue UserRHS =
+        User->getOperand((UserIID == Intrinsic::not_intrinsic) ? 1 : 2);
+    if (UserLHS == OldDUP) {
+      if (isEssentiallyExtractHighSubvector(UserRHS)) {
+        continue;
+      }
+      if (!UserRHS.getValueType().is64BitVector()) {
+        continue;
+      }
+      UserLHS = LowExtracted;
+    } else {
+      if (isEssentiallyExtractHighSubvector(UserLHS)) {
+        continue;
+      }
+      if (!UserLHS.getValueType().is64BitVector()) {
+        continue;
+      }
+      UserRHS = LowExtracted;
+    }
+
+    SDValue NewNode;
+    if (UserIID == Intrinsic::not_intrinsic) {
+      NewNode = DAG.getNode(User->getOpcode(), SDLoc(User),
+                            User->getValueType(0), UserLHS, UserRHS);
+    } else {
+      NewNode = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
+                            User->getValueType(0), User->getOperand(0), UserLHS,
+                            UserRHS);
+    }
+    DCI.CombineTo(User, NewNode);
   }
 
   if (IID == Intrinsic::not_intrinsic)
