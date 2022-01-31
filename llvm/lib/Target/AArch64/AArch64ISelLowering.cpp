@@ -14788,15 +14788,15 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
   if (isEssentiallyExtractHighSubvector(LHS)) {
     OldDUP = RHS;
     RHS = tryExtendDUPToExtractHigh(RHS, DAG);
-    if (!RHS.getNode())
-      return SDValue();
     ExtracedDUP = RHS;
+    if (!RHS)
+      return SDValue();
   } else if (isEssentiallyExtractHighSubvector(RHS)) {
     OldDUP = LHS;
     LHS = tryExtendDUPToExtractHigh(LHS, DAG);
-    if (!LHS.getNode())
-      return SDValue();
     ExtracedDUP = LHS;
+    if (!LHS)
+      return SDValue();
   } else {
     return SDValue();
   }
@@ -14826,8 +14826,8 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
     }
 
     SDLoc dl(User);
-    MVT NarrowTy = OldDUP.getSimpleValueType();
-    SDValue LowExtracted = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, NarrowTy,
+    MVT VT = OldDUP.getSimpleValueType();
+    SDValue LowExtracted = DAG.getNode(ISD::EXTRACT_SUBVECTOR, dl, VT,
                                        ExtracedDUP.getOperand(0),
                                        DAG.getConstant(0, dl, MVT::i64));
 
@@ -14838,33 +14838,25 @@ static SDValue tryCombineLongOpWithDup(unsigned IID, SDNode *N,
     SDValue UserRHS =
         User->getOperand((UserIID == Intrinsic::not_intrinsic) ? 1 : 2);
     if (UserLHS == OldDUP) {
-      if (isEssentiallyExtractHighSubvector(UserRHS)) {
-        continue;
-      }
-      if (!UserRHS.getValueType().is64BitVector()) {
+      if (isEssentiallyExtractHighSubvector(UserRHS) || !UserRHS.getValueType().is64BitVector()) {
         continue;
       }
       UserLHS = LowExtracted;
     } else {
-      if (isEssentiallyExtractHighSubvector(UserLHS)) {
-        continue;
-      }
-      if (!UserLHS.getValueType().is64BitVector()) {
+      if (isEssentiallyExtractHighSubvector(UserLHS) || !UserLHS.getValueType().is64BitVector()) {
         continue;
       }
       UserRHS = LowExtracted;
     }
 
-    SDValue NewNode;
     if (UserIID == Intrinsic::not_intrinsic) {
-      NewNode = DAG.getNode(User->getOpcode(), SDLoc(User),
-                            User->getValueType(0), UserLHS, UserRHS);
+        DCI.CombineTo(User, DAG.getNode(User->getOpcode(), SDLoc(User),
+            User->getValueType(0), UserLHS, UserRHS));
     } else {
-      NewNode = DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
+        DCI.CombineTo(User, DAG.getNode(ISD::INTRINSIC_WO_CHAIN, SDLoc(User),
                             User->getValueType(0), User->getOperand(0), UserLHS,
-                            UserRHS);
+                            UserRHS));
     }
-    DCI.CombineTo(User, NewNode);
   }
 
   if (IID == Intrinsic::not_intrinsic)
