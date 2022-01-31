@@ -14697,7 +14697,7 @@ static SDValue performAddDotCombine(SDNode *N, SelectionDAG &DAG) {
 }
 
 // Try to fold (sub Y, (csel X, -X, pl)) -> (add Y, (csel -X, X, pl)) when
-// condition came from (subs 0, X). This matches the CSEL expansion of
+// condition came from (subs X, 0). This matches the CSEL expansion of
 // abs node lowered by lowerABS. By swapping the operands, we convert
 // abs to nabs. Note that (csel X, -X, pl) will be matched
 // to csneg by the CondSelectOp pattern.
@@ -14740,10 +14740,10 @@ static SDValue performCombineSubABS(SDNode *N, SelectionDAG &DAG) {
   // Build a new CSEL with the operands swapped.
   SDLoc DL(N);
   MVT VT = N->getSimpleValueType(0);
-  SDValue Cmov = DAG.getNode(AArch64ISD::CSEL, DL, VT, TrueOp, FalseOp,
+  SDValue Csel = DAG.getNode(AArch64ISD::CSEL, DL, VT, TrueOp, FalseOp,
                              N1.getOperand(2), Cmp);
   // Convert sub to add.
-  return DAG.getNode(ISD::ADD, DL, VT, N0, Cmov);
+  return DAG.getNode(ISD::ADD, DL, VT, N0, Csel);
 }
 
 // The basic add/sub long vector instructions have variants with "2" on the end
