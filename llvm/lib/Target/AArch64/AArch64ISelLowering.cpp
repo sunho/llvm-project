@@ -14696,23 +14696,23 @@ static SDValue performAddDotCombine(SDNode *N, SelectionDAG &DAG) {
                      Dot.getOperand(2));
 }
 
-static bool isNegatedInteger(const SDValue& Op) {
-    return Op.getOpcode() == ISD::SUB && isNullConstant(Op.getOperand(0));
+static bool isNegatedInteger(const SDValue &Op) {
+  return Op.getOpcode() == ISD::SUB && isNullConstant(Op.getOperand(0));
 }
 
-static SDValue getNegatedInteger(const SDValue& Op, SelectionDAG& DAG) {
-    SDLoc DL(Op);
-    EVT VT = Op.getValueType();
-    SDValue Zero = DAG.getConstant(0, DL, VT);
-    return DAG.getNode(ISD::SUB, DL, VT, Zero, Op);
+static SDValue getNegatedInteger(const SDValue &Op, SelectionDAG &DAG) {
+  SDLoc DL(Op);
+  EVT VT = Op.getValueType();
+  SDValue Zero = DAG.getConstant(0, DL, VT);
+  return DAG.getNode(ISD::SUB, DL, VT, Zero, Op);
 }
 
 // Try to fold
-// 
-// (neg (csel X, Y)) -> (csel (neg X), (neg Y)) 
-// 
-// The folding helps csel to be matched with csneg without generating 
-// redundant neg instruction, which includes negation of the csel expansion 
+//
+// (neg (csel X, Y)) -> (csel (neg X), (neg Y))
+//
+// The folding helps csel to be matched with csneg without generating
+// redundant neg instruction, which includes negation of the csel expansion
 // of abs node lowered by lowerABS.
 static SDValue performNegCSelCombine(SDNode *N, SelectionDAG &DAG) {
   if (N->getOpcode() != ISD::SUB || !isNullConstant(N->getOperand(0)))
@@ -14720,7 +14720,7 @@ static SDValue performNegCSelCombine(SDNode *N, SelectionDAG &DAG) {
 
   SDValue CSel = N->getOperand(1);
   if (CSel.getOpcode() != AArch64ISD::CSEL || !CSel->hasOneUse())
-      return SDValue();
+    return SDValue();
 
   SDValue N0 = CSel.getOperand(0);
   SDValue N1 = CSel.getOperand(1);
@@ -14735,7 +14735,8 @@ static SDValue performNegCSelCombine(SDNode *N, SelectionDAG &DAG) {
 
   SDLoc DL(N);
   EVT VT = CSel.getValueType();
-  return DAG.getNode(AArch64ISD::CSEL, DL, VT, N0N, N1N, CSel.getOperand(2), CSel.getOperand(3));
+  return DAG.getNode(AArch64ISD::CSEL, DL, VT, N0N, N1N, CSel.getOperand(2),
+                     CSel.getOperand(3));
 }
 
 // The basic add/sub long vector instructions have variants with "2" on the end
@@ -14800,7 +14801,7 @@ static SDValue performAddSubCombine(SDNode *N,
   if (SDValue Val = performAddDotCombine(N, DAG))
     return Val;
   if (SDValue Val = performNegCSelCombine(N, DAG))
-      return Val;
+    return Val;
 
   return performAddSubLongCombine(N, DCI, DAG);
 }
