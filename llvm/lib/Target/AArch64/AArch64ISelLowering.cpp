@@ -14696,54 +14696,46 @@ static SDValue performAddDotCombine(SDNode *N, SelectionDAG &DAG) {
                      Dot.getOperand(2));
 }
 
-// Try to fold (sub Y, (csel X, -X, pl)) -> (add Y, (csel -X, X, pl)) when
-// condition came from (subs X, 0). This matches the CSEL expansion of
-// abs node lowered by lowerABS. By swapping the operands, we convert
-// abs to nabs. Note that (csel X, -X, pl) will be matched
-// to csneg by the CondSelectOp pattern.
-static SDValue performCombineSubABS(SDNode *N, SelectionDAG &DAG) {
-  SDValue N0 = N->getOperand(0);
-  SDValue N1 = N->getOperand(1);
+static bool isNegatedInteger(const SDValue& Op) {
+    return Op.getOpcode() == ISD::SUB && isNullConstant(Op.getOperand(0));
+}
 
-  // Is abs node has other uses, don't do the combine
-  if (N1.getOpcode() != AArch64ISD::CSEL || !N1.hasOneUse())
+static SDValue getNegatedInteger(const SDValue& Op, SelectionDAG& DAG) {
+    SDLoc DL(Op);
+    EVT VT = Op.getValueType();
+    SDValue Zero = DAG.getConstant(0, DL, VT);
+    return DAG.getNode(ISD::SUB, DL, VT, Zero, Op);
+}
+
+// Try to fold
+// 
+// (neg (csel X, Y)) -> (csel (neg X), (neg Y)) 
+// 
+// The folding helps csel to be matched with csneg without generating 
+// redundant neg instruction, which includes negation of the csel expansion 
+// of abs node lowered by lowerABS.
+static SDValue performNegCSelCombine(SDNode *N, SelectionDAG &DAG) {
+  if (N->getOpcode() != ISD::SUB || !isNullConstant(N->getOperand(0)))
     return SDValue();
 
-  ConstantSDNode *CCNode = cast<ConstantSDNode>(N1->getOperand(2));
-  AArch64CC::CondCode CC =
-      static_cast<AArch64CC::CondCode>(CCNode->getSExtValue());
+  SDValue CSel = N->getOperand(1);
+  if (CSel.getOpcode() != AArch64ISD::CSEL || !CSel->hasOneUse())
+      return SDValue();
 
-  if (CC != AArch64CC::PL && CC != AArch64CC::MI)
+  SDValue N0 = CSel.getOperand(0);
+  SDValue N1 = CSel.getOperand(1);
+
+  // If both of them is not negations, it's not worth the folding as it
+  // introduces two additional negations while reducing one negation.
+  if (!isNegatedInteger(N0) && !isNegatedInteger(N1))
     return SDValue();
 
-  // Condition should come from SUBS
-  SDValue Cmp = N1.getOperand(3);
-  if (Cmp.getOpcode() != AArch64ISD::SUBS || !isNullConstant(Cmp.getOperand(1)))
-    return SDValue();
-  assert(Cmp.getResNo() == 1 && "Unexpected result number");
+  SDValue N0N = getNegatedInteger(N0, DAG);
+  SDValue N1N = getNegatedInteger(N1, DAG);
 
-  // Get the X
-  SDValue X = Cmp.getOperand(0);
-
-  SDValue FalseOp = N1.getOperand(0);
-  SDValue TrueOp = N1.getOperand(1);
-
-  // CSEL operands should be X and NegX. Order doesn't matter.
-  auto IsNeg = [](SDValue Value, SDValue X) {
-    return Value.getOpcode() == ISD::SUB &&
-           isNullConstant(Value.getOperand(0)) && X == Value.getOperand(1);
-  };
-  if (!(IsNeg(FalseOp, X) && TrueOp == X) &&
-      !(IsNeg(TrueOp, X) && FalseOp == X))
-    return SDValue();
-
-  // Build a new CSEL with the operands swapped.
   SDLoc DL(N);
-  MVT VT = N->getSimpleValueType(0);
-  SDValue Csel = DAG.getNode(AArch64ISD::CSEL, DL, VT, TrueOp, FalseOp,
-                             N1.getOperand(2), Cmp);
-  // Convert sub to add.
-  return DAG.getNode(ISD::ADD, DL, VT, N0, Csel);
+  EVT VT = CSel.getValueType();
+  return DAG.getNode(AArch64ISD::CSEL, DL, VT, N0N, N1N, CSel.getOperand(2), CSel.getOperand(3));
 }
 
 // The basic add/sub long vector instructions have variants with "2" on the end
@@ -14807,6 +14799,8 @@ static SDValue performAddSubCombine(SDNode *N,
     return Val;
   if (SDValue Val = performAddDotCombine(N, DAG))
     return Val;
+  if (SDValue Val = performNegCSelCombine(N, DAG))
+      return Val;
 
   return performAddSubLongCombine(N, DCI, DAG);
 }
@@ -17668,10 +17662,6 @@ SDValue AArch64TargetLowering::PerformDAGCombine(SDNode *N,
     LLVM_DEBUG(dbgs() << "Custom combining: skipping\n");
     break;
   case ISD::SUB:
-    if (SDValue Val = performCombineSubABS(N, DAG)) {
-      return Val;
-    }
-    LLVM_FALLTHROUGH;
   case ISD::ADD:
     return performAddSubCombine(N, DCI, DAG);
   case ISD::XOR:
