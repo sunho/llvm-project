@@ -23,6 +23,8 @@ namespace jitlink {
 namespace ELF_aarch64_Edges {
 enum ELFAarch64RelocationKind : Edge::Kind {
   R_AARCH64_CALL26 = Edge::FirstRelocation,
+  R_AARCH64_ADR_PREL_PG_HI21,
+  R_AARCH64_ADD_ABS_LO12_NC,
 };
 } // namespace ELF_aarch64_Edges
 

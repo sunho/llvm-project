@@ -51,6 +51,10 @@ private:
     switch (Type) {
     case ELF::R_AARCH64_CALL26:
       return ELF_aarch64_Edges::R_AARCH64_CALL26;
+    case ELF::R_AARCH64_ADR_PREL_PG_HI21:
+      return ELF_aarch64_Edges::R_AARCH64_ADR_PREL_PG_HI21;
+    case ELF::R_AARCH64_ADD_ABS_LO12_NC:
+      return ELF_aarch64_Edges::R_AARCH64_ADD_ABS_LO12_NC;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -106,6 +110,14 @@ private:
     case R_AARCH64_CALL26: {
       Kind = aarch64::Branch26;
       break;
+    }
+    case R_AARCH64_ADR_PREL_PG_HI21: {
+      Kind = aarch64::Page21;
+      break;
+    case R_AARCH64_ADD_ABS_LO12_NC: {
+      Kind = aarch64::PageOffset12;
+      break;
+    }
     }
     default:
       llvm_unreachable("Special relocation kind should not appear in "
@@ -171,6 +183,10 @@ const char *getELFAarch64RelocationKindName(Edge::Kind R) {
   switch (R) {
   case ELF_aarch64_Edges::R_AARCH64_CALL26:
     return "R_AARCH64_CALL26";
+  case ELF_aarch64_Edges::R_AARCH64_ADR_PREL_PG_HI21:
+    return "R_AARCH64_ADR_PREL_PG_HI21";
+  case ELF_aarch64_Edges::R_AARCH64_ADD_ABS_LO12_NC:
+    return "R_AARCH64_ADD_ABS_LO12_NC";
   default:
     llvm_unreachable("unhandled elf relocation kind name");
   }
