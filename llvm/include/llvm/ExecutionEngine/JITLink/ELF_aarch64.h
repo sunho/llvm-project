@@ -20,6 +20,12 @@
 namespace llvm {
 namespace jitlink {
 
+namespace ELF_aarch64_Edges {
+enum ELFAarch64RelocationKind : Edge::Kind {
+  R_AARCH64_CALL26 = Edge::FirstRelocation,
+};
+} // namespace ELF_aarch64_Edges
+
 /// Create a LinkGraph from an ELF/aarch64 relocatable object
 ///
 /// Note: The graph does not take ownership of the underlying buffer, nor copy
@@ -32,6 +38,9 @@ createLinkGraphFromELFObject_aarch64(MemoryBufferRef ObjectBuffer);
 /// object file.
 void link_ELF_aarch64(std::unique_ptr<LinkGraph> G,
                       std::unique_ptr<JITLinkContext> Ctx);
+
+/// Return the string name of the given ELF aarch64 edge kind.
+const char *getELFAarch64RelocationKindName(Edge::Kind R);
 
 } // end namespace jitlink
 } // end namespace llvm
