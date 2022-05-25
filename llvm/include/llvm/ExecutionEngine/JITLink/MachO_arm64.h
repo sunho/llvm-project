@@ -19,27 +19,25 @@ namespace llvm {
 namespace jitlink {
 
 namespace MachO_arm64_Edges {
-
 enum MachOARM64RelocationKind : Edge::Kind {
-  Branch26 = Edge::FirstRelocation,
-  Pointer32,
-  Pointer64,
-  Pointer64Anon,
-  Page21,
-  PageOffset12,
-  GOTPage21,
-  GOTPageOffset12,
-  TLVPage21,
-  TLVPageOffset12,
-  PointerToGOT,
-  PairedAddend,
-  LDRLiteral19,
-  Delta32,
-  Delta64,
-  NegDelta32,
-  NegDelta64,
+  MachOBranch26 = Edge::FirstRelocation,
+  MachOPointer32,
+  MachOPointer64,
+  MachOPointer64Anon,
+  MachOPage21,
+  MachOPageOffset12,
+  MachOGOTPage21,
+  MachOGOTPageOffset12,
+  MachOTLVPage21,
+  MachOTLVPageOffset12,
+  MachOPointerToGOT,
+  MachOPairedAddend,
+  MachOLDRLiteral19,
+  MachODelta32,
+  MachODelta64,
+  MachONegDelta32,
+  MachONegDelta64,
 };
-
 } // namespace MachO_arm64_Edges
 
 /// Create a LinkGraph from a MachO/arm64 relocatable object.
