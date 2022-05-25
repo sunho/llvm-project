@@ -51,6 +51,10 @@ private:
     switch (Type) {
     case ELF::R_AARCH64_CALL26:
       return ELF_aarch64_Edges::ELFBranch26;
+    case ELF::R_AARCH64_ADR_PREL_PG_HI21:
+      return ELF_aarch64_Edges::ELFPage21;
+    case ELF::R_AARCH64_ADD_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFPageOffset12;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -105,6 +109,14 @@ private:
     switch (*RelocKind) {
     case ELFBranch26: {
       Kind = aarch64::Branch26;
+      break;
+    }
+    case ELFPage21: {
+      Kind = aarch64::Page21;
+      break;
+    }
+    case ELFPageOffset12: {
+      Kind = aarch64::PageOffset12;
       break;
     }
     };
@@ -168,6 +180,10 @@ const char *getELFAArch64RelocationKindName(Edge::Kind R) {
   switch (R) {
   case ELF_aarch64_Edges::ELFBranch26:
     return "ELFBranch26";
+  case ELF_aarch64_Edges::ELFPage21:
+    return "ELFPage21";
+  case ELF_aarch64_Edges::ELFPageOffset12:
+    return "ELFPageOffset12";
   default:
     return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
   }
