@@ -50,11 +50,11 @@ private:
     using namespace aarch64;
     switch (Type) {
     case ELF::R_AARCH64_CALL26:
-      return ELF_aarch64_Edges::ELFBranch26;
+      return ELF_aarch64_Edges::ELFCall26;
     case ELF::R_AARCH64_ADR_PREL_PG_HI21:
-      return ELF_aarch64_Edges::ELFPage21;
+      return ELF_aarch64_Edges::ELFAdrPage21;
     case ELF::R_AARCH64_ADD_ABS_LO12_NC:
-      return ELF_aarch64_Edges::ELFPageOffset12;
+      return ELF_aarch64_Edges::ELFAddAbs12;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -107,15 +107,15 @@ private:
     Edge::Kind Kind = Edge::Invalid;
 
     switch (*RelocKind) {
-    case ELFBranch26: {
+    case ELFCall26: {
       Kind = aarch64::Branch26;
       break;
     }
-    case ELFPage21: {
+    case ELFAdrPage21: {
       Kind = aarch64::Page21;
       break;
     }
-    case ELFPageOffset12: {
+    case ELFAddAbs12: {
       Kind = aarch64::PageOffset12;
       break;
     }
@@ -178,12 +178,12 @@ void link_ELF_aarch64(std::unique_ptr<LinkGraph> G,
 
 const char *getELFAArch64RelocationKindName(Edge::Kind R) {
   switch (R) {
-  case ELF_aarch64_Edges::ELFBranch26:
-    return "ELFBranch26";
-  case ELF_aarch64_Edges::ELFPage21:
-    return "ELFPage21";
-  case ELF_aarch64_Edges::ELFPageOffset12:
-    return "ELFPageOffset12";
+  case ELF_aarch64_Edges::ELFCall26:
+    return "ELFCall26";
+  case ELF_aarch64_Edges::ELFAdrPage21:
+    return "ELFAdrPage21";
+  case ELF_aarch64_Edges::ELFAddAbs12:
+    return "ELFAddAbs12";
   default:
     return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
   }

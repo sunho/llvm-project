@@ -22,9 +22,9 @@ namespace jitlink {
 
 namespace ELF_aarch64_Edges {
 enum ELFAArch64RelocationKind : Edge::Kind {
-  ELFBranch26 = Edge::FirstRelocation,
-  ELFPage21,
-  ELFPageOffset12,
+  ELFCall26 = Edge::FirstRelocation,
+  ELFAdrPage21,
+  ELFAddAbs12,
 };
 } // namespace ELF_aarch64_Edges
 
