@@ -25,6 +25,12 @@ enum ELFAArch64RelocationKind : Edge::Kind {
   ELFCall26 = Edge::FirstRelocation,
   ELFAdrPage21,
   ELFAddAbs12,
+  ELFLdSt8Abs12,
+  ELFLdSt16Abs12,
+  ELFLdSt32Abs12,
+  ELFLdSt64Abs12,
+  ELFLdSt128Abs12,
+  ELFDelta32
 };
 } // namespace ELF_aarch64_Edges
 
