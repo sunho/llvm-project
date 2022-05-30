@@ -34,6 +34,8 @@ unsigned getPageOffset12Shift(uint32_t Instr) {
 
     return ImplicitShift;
   }
+
+  return 0;
 }
 
 Error applyFixup(LinkGraph &G, Block &B, const Edge &E) {

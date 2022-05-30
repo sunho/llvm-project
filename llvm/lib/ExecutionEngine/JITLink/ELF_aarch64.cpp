@@ -55,6 +55,16 @@ private:
       return ELF_aarch64_Edges::ELFAdrPage21;
     case ELF::R_AARCH64_ADD_ABS_LO12_NC:
       return ELF_aarch64_Edges::ELFAddAbs12;
+    case ELF::R_AARCH64_LDST8_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFLdSt8Abs12;
+    case ELF::R_AARCH64_LDST16_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFLdSt16Abs12;
+    case ELF::R_AARCH64_LDST32_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFLdSt32Abs12;
+    case ELF::R_AARCH64_LDST64_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFLdSt64Abs12;
+    case ELF::R_AARCH64_LDST128_ABS_LO12_NC:
+      return ELF_aarch64_Edges::ELFLdSt128Abs12;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -77,6 +87,7 @@ private:
   Error addSingleRelocation(const typename ELFT::Rela &Rel,
                             const typename ELFT::Shdr &FixupSect,
                             Block &BlockToFix) {
+    using namespace support;
     using Base = ELFLinkGraphBuilder<ELFT>;
 
     uint32_t SymbolIndex = Rel.getSymbol(false);
@@ -104,6 +115,10 @@ private:
         orc::ExecutorAddr(FixupSect.sh_addr) + Rel.r_offset;
     Edge::OffsetT Offset = FixupAddress - BlockToFix.getAddress();
 
+    // Get a pointer to the fixup content.
+    const void *FixupContent = BlockToFix.getContent().data() +
+                               (FixupAddress - BlockToFix.getAddress());
+
     Edge::Kind Kind = Edge::Invalid;
 
     switch (*RelocKind) {
@@ -116,6 +131,61 @@ private:
       break;
     }
     case ELFAddAbs12: {
+      Kind = aarch64::PageOffset12;
+      break;
+    }
+    case ELFLdSt8Abs12: {
+      uint32_t Instr = *(const ulittle32_t *)FixupContent;
+      if (!aarch64::isLoadStoreImm12(Instr) ||
+          aarch64::getPageOffset12Shift(Instr) != 0)
+        return make_error<JITLinkError>(
+            "R_AARCH64_LDST8_ABS_LO12_NC target is not a "
+            "byte alligend LD/ST (imm12) instruction");
+
+      Kind = aarch64::PageOffset12;
+      break;
+    }
+    case ELFLdSt16Abs12: {
+      uint32_t Instr = *(const ulittle32_t *)FixupContent;
+      if (!aarch64::isLoadStoreImm12(Instr) ||
+          aarch64::getPageOffset12Shift(Instr) != 1)
+        return make_error<JITLinkError>(
+            "R_AARCH64_LDST16_ABS_LO12_NC target is not a "
+            "half alligend LD/ST (imm12) instruction");
+
+      Kind = aarch64::PageOffset12;
+      break;
+    }
+    case ELFLdSt32Abs12: {
+      uint32_t Instr = *(const ulittle32_t *)FixupContent;
+      if (!aarch64::isLoadStoreImm12(Instr) ||
+          aarch64::getPageOffset12Shift(Instr) != 2)
+        return make_error<JITLinkError>(
+            "R_AARCH64_LDST32_ABS_LO12_NC target is not a "
+            "word alligend LD/ST (imm12) instruction");
+
+      Kind = aarch64::PageOffset12;
+      break;
+    }
+    case ELFLdSt64Abs12: {
+      uint32_t Instr = *(const ulittle32_t *)FixupContent;
+      if (!aarch64::isLoadStoreImm12(Instr) ||
+          aarch64::getPageOffset12Shift(Instr) != 3)
+        return make_error<JITLinkError>(
+            "R_AARCH64_LDST64_ABS_LO12_NC target is not a "
+            "doubleword alligend LD/ST (imm12) instruction");
+
+      Kind = aarch64::PageOffset12;
+      break;
+    }
+    case ELFLdSt128Abs12: {
+      uint32_t Instr = *(const ulittle32_t *)FixupContent;
+      if (!aarch64::isLoadStoreImm12(Instr) ||
+          aarch64::getPageOffset12Shift(Instr) != 4)
+        return make_error<JITLinkError>(
+            "R_AARCH64_LDST128_ABS_LO12_NC target is not a "
+            "quadword alligend LD/ST (imm12) instruction");
+
       Kind = aarch64::PageOffset12;
       break;
     }
@@ -184,6 +254,16 @@ const char *getELFAArch64RelocationKindName(Edge::Kind R) {
     return "ELFAdrPage21";
   case ELF_aarch64_Edges::ELFAddAbs12:
     return "ELFAddAbs12";
+  case ELF_aarch64_Edges::ELFLdSt8Abs12:
+    return "ELFLdSt8Abs12";
+  case ELF_aarch64_Edges::ELFLdSt16Abs12:
+    return "ELFLdSt16Abs12";
+  case ELF_aarch64_Edges::ELFLdSt32Abs12:
+    return "ELFLdSt32Abs12";
+  case ELF_aarch64_Edges::ELFLdSt64Abs12:
+    return "ELFLdSt64Abs12";
+  case ELF_aarch64_Edges::ELFLdSt128Abs12:
+    return "ELFLdSt128Abs12";
   default:
     return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
   }
