@@ -30,6 +30,7 @@ enum ELFAArch64RelocationKind : Edge::Kind {
   ELFLdSt32Abs12,
   ELFLdSt64Abs12,
   ELFLdSt128Abs12,
+  ELFAbs64
 };
 } // namespace ELF_aarch64_Edges
 
