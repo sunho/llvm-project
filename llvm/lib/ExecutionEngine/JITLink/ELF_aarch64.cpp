@@ -50,11 +50,11 @@ private:
     using namespace aarch64;
     switch (Type) {
     case ELF::R_AARCH64_CALL26:
-      return ELF_aarch64_Edges::ELFBranch26;
+      return ELF_aarch64_Edges::ELFCall26;
     case ELF::R_AARCH64_ADR_PREL_PG_HI21:
-      return ELF_aarch64_Edges::ELFPage21;
+      return ELF_aarch64_Edges::ELFAdrPage21;
     case ELF::R_AARCH64_ADD_ABS_LO12_NC:
-      return ELF_aarch64_Edges::ELFPageOffset12;
+      return ELF_aarch64_Edges::ELFAddAbs12;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
