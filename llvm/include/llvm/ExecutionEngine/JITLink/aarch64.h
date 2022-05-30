@@ -43,11 +43,15 @@ enum EdgeKind_aarch64 : Edge::Kind {
 /// only
 const char *getEdgeKindName(Edge::Kind K);
 
-inline unsigned getPageOffset12Shift(uint32_t Instr) {
+inline bool isLoadStoreImm12(uint32_t Instr) {
   constexpr uint32_t LoadStoreImm12Mask = 0x3b000000;
+  return (Instr & LoadStoreImm12Mask) == 0x39000000;
+}
+
+inline unsigned getPageOffset12Shift(uint32_t Instr) {
   constexpr uint32_t Vec128Mask = 0x04800000;
 
-  if ((Instr & LoadStoreImm12Mask) == 0x39000000) {
+  if (isLoadStoreImm12(Instr)) {
     uint32_t ImplicitShift = Instr >> 30;
     if (ImplicitShift == 0)
       if ((Instr & Vec128Mask) == Vec128Mask)
