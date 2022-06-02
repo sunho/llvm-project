@@ -31,6 +31,8 @@ enum ELFAArch64RelocationKind : Edge::Kind {
   ELFLdSt64Abs12,
   ELFLdSt128Abs12,
   ELFAbs64,
+  ELFPrel32,
+  ELFPrel64,
   ELFAdrGOTPage21,
   ELFLd64GOTLo12,
 };
