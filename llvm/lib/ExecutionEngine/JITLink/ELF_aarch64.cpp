@@ -22,6 +22,7 @@
 
 using namespace llvm;
 using namespace llvm::jitlink;
+using namespace llvm::jitlink::ELF_aarch64_Edges;
 
 namespace llvm {
 namespace jitlink {
@@ -37,46 +38,19 @@ public:
 
 private:
   Error applyFixup(LinkGraph &G, Block &B, const Edge &E) const {
-    using namespace aarch64;
-    using namespace llvm::support;
-
-    char *BlockWorkingMem = B.getAlreadyMutableContent().data();
-    char *FixupPtr = BlockWorkingMem + E.getOffset();
-    auto FixupAddress = B.getAddress() + E.getOffset();
-    switch (E.getKind()) {
-    case aarch64::R_AARCH64_CALL26: {
-      assert((FixupAddress.getValue() & 0x3) == 0 &&
-             "Call-inst is not 32-bit aligned");
-      int64_t Value = E.getTarget().getAddress() - FixupAddress + E.getAddend();
-
-      if (static_cast<uint64_t>(Value) & 0x3)
-        return make_error<JITLinkError>("Call target is not 32-bit aligned");
-
-      if (!isInt<28>(Value))
-        return makeTargetOutOfRangeError(G, B, E);
-
-      uint32_t RawInstr = *(little32_t *)FixupPtr;
-      assert((RawInstr & 0x7fffffff) == 0x14000000 &&
-             "RawInstr isn't a B or BR immediate instruction");
-      uint32_t Imm = (static_cast<uint32_t>(Value) & ((1 << 28) - 1)) >> 2;
-      uint32_t FixedInstr = RawInstr | Imm;
-      *(little32_t *)FixupPtr = FixedInstr;
-      break;
-    }
-    }
-    return Error::success();
+    return aarch64::applyFixup(G, B, E);
   }
 };
 
 template <typename ELFT>
 class ELFLinkGraphBuilder_aarch64 : public ELFLinkGraphBuilder<ELFT> {
 private:
-  static Expected<aarch64::EdgeKind_aarch64>
+  static Expected<ELF_aarch64_Edges::ELFAArch64RelocationKind>
   getRelocationKind(const uint32_t Type) {
     using namespace aarch64;
     switch (Type) {
     case ELF::R_AARCH64_CALL26:
-      return EdgeKind_aarch64::R_AARCH64_CALL26;
+      return ELF_aarch64_Edges::ELFBranch26;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -116,18 +90,29 @@ private:
           inconvertibleErrorCode());
 
     uint32_t Type = Rel.getType(false);
-    Expected<aarch64::EdgeKind_aarch64> Kind = getRelocationKind(Type);
-    if (!Kind)
-      return Kind.takeError();
+    Expected<ELF_aarch64_Edges::ELFAArch64RelocationKind> RelocKind =
+        getRelocationKind(Type);
+    if (!RelocKind)
+      return RelocKind.takeError();
 
     int64_t Addend = Rel.r_addend;
     orc::ExecutorAddr FixupAddress =
         orc::ExecutorAddr(FixupSect.sh_addr) + Rel.r_offset;
     Edge::OffsetT Offset = FixupAddress - BlockToFix.getAddress();
-    Edge GE(*Kind, Offset, *GraphSymbol, Addend);
+
+    Edge::Kind Kind = Edge::Invalid;
+
+    switch (*RelocKind) {
+    case ELFBranch26: {
+      Kind = aarch64::Branch26;
+      break;
+    }
+    };
+
+    Edge GE(Kind, Offset, *GraphSymbol, Addend);
     LLVM_DEBUG({
       dbgs() << "    ";
-      printEdge(dbgs(), BlockToFix, GE, aarch64::getEdgeKindName(*Kind));
+      printEdge(dbgs(), BlockToFix, GE, aarch64::getEdgeKindName(Kind));
       dbgs() << "\n";
     });
 
@@ -177,6 +162,15 @@ void link_ELF_aarch64(std::unique_ptr<LinkGraph> G,
     return Ctx->notifyFailed(std::move(Err));
 
   ELFJITLinker_aarch64::link(std::move(Ctx), std::move(G), std::move(Config));
+}
+
+const char *getELFAArch64RelocationKindName(Edge::Kind R) {
+  switch (R) {
+  case ELF_aarch64_Edges::ELFBranch26:
+    return "ELFBranch26";
+  default:
+    return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
+  }
 }
 
 } // namespace jitlink
