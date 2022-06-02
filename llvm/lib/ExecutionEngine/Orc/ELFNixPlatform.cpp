@@ -11,6 +11,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/ExecutionEngine/JITLink/ELF_x86_64.h"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
+#include "llvm/ExecutionEngine/JITLink/aarch64.h"
 #include "llvm/ExecutionEngine/Orc/DebugUtils.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/Support/BinaryByteStream.h"
@@ -46,6 +47,11 @@ public:
       PointerSize = 8;
       Endianness = support::endianness::little;
       EdgeKind = jitlink::x86_64::Pointer64;
+      break;
+    case Triple::aarch64:
+      PointerSize = 8;
+      Endianness = support::endianness::little;
+      EdgeKind = jitlink::aarch64::Pointer64;
       break;
     default:
       llvm_unreachable("Unrecognized architecture");
@@ -227,6 +233,7 @@ bool ELFNixPlatform::isInitializerSection(StringRef SecName) {
 bool ELFNixPlatform::supportedTarget(const Triple &TT) {
   switch (TT.getArch()) {
   case Triple::x86_64:
+  case Triple::aarch64:
     return true;
   default:
     return false;
