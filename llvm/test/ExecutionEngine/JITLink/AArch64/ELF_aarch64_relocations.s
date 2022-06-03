@@ -149,6 +149,15 @@ local_func_addr_quad:
         .xword	named_func
         .size	local_func_addr_quad, 8
 
+# Check R_AARCH64_ABS64 relocation of a function pointer to external symbol
+#
+# jitlink-check: *{8}external_func_addr_quad = external_func
+        .globl  external_func_addr_quad
+        .p2align  3
+external_func_addr_quad:
+        .xword	external_func
+        .size	external_func_addr_quad, 8
+
 # Check R_AARCH64_ADR_GOT_PAGE / R_AARCH64_LD64_GOT_LO12_NC handling with a
 # reference to an external symbol. Validate both the reference to the GOT entry,
 # and also the content of the GOT entry.
