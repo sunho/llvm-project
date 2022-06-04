@@ -66,6 +66,8 @@ private:
       return ELFLdSt64Abs12;
     case ELF::R_AARCH64_LDST128_ABS_LO12_NC:
       return ELFLdSt128Abs12;
+    case ELF::R_AARCH64_ABS64:
+      return ELFAbs64;
     }
 
     return make_error<JITLinkError>("Unsupported aarch64 relocation:" +
@@ -190,6 +192,10 @@ private:
       Kind = aarch64::PageOffset12;
       break;
     }
+    case ELFAbs64: {
+      Kind = aarch64::Pointer64;
+      break;
+    }
     };
 
     Edge GE(Kind, Offset, *GraphSymbol, Addend);
@@ -265,6 +271,8 @@ const char *getELFAArch64RelocationKindName(Edge::Kind R) {
     return "ELFLdSt64Abs12";
   case ELFLdSt128Abs12:
     return "ELFLdSt128Abs12";
+  case ELFAbs64:
+    return "ELFAbs64";
   default:
     return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
   }
