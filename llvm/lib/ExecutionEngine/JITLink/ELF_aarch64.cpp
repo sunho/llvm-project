@@ -355,12 +355,12 @@ void link_ELF_aarch64(std::unique_ptr<LinkGraph> G,
                       std::unique_ptr<JITLinkContext> Ctx) {
   PassConfiguration Config;
   const Triple &TT = G->getTargetTriple();
-  Config.PrePrunePasses.push_back(
-      DWARFRecordSectionSplitter(".eh_frame"));
-  Config.PrePrunePasses.push_back(EHFrameEdgeFixer(
-      ".eh_frame", 8, aarch64::Pointer32, aarch64::Pointer64,
-      aarch64::Delta32, aarch64::Delta64, aarch64::NegDelta32));
   if (Ctx->shouldAddDefaultTargetPasses(TT)) {
+    Config.PrePrunePasses.push_back(
+        DWARFRecordSectionSplitter(".eh_frame"));
+    Config.PrePrunePasses.push_back(EHFrameEdgeFixer(
+        ".eh_frame", 8, aarch64::Pointer32, aarch64::Pointer64,
+        aarch64::Delta32, aarch64::Delta64, aarch64::NegDelta32));
     if (auto MarkLive = Ctx->getMarkLivePass(TT))
       Config.PrePrunePasses.push_back(std::move(MarkLive));
     else
