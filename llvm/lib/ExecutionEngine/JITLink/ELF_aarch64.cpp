@@ -70,6 +70,10 @@ private:
       return ELFLdSt128Abs12;
     case ELF::R_AARCH64_ABS64:
       return ELFAbs64;
+    case ELF::R_AARCH64_PREL32:
+      return ELFPrel32;
+    case ELF::R_AARCH64_PREL64:
+      return ELFPrel64;
     case ELF::R_AARCH64_ADR_GOT_PAGE:
       return ELFAdrGOTPage21;
     case ELF::R_AARCH64_LD64_GOT_LO12_NC:
@@ -200,6 +204,14 @@ private:
     }
     case ELFAbs64: {
       Kind = aarch64::Pointer64;
+      break;
+    }
+    case ELFPrel32: {
+      Kind = aarch64::Delta32;
+      break;
+    }
+    case ELFPrel64: {
+      Kind = aarch64::Delta64;
       break;
     }
     case ELFAdrGOTPage21: {
@@ -346,6 +358,10 @@ const char *getELFAArch64RelocationKindName(Edge::Kind R) {
     return "ELFLdSt128Abs12";
   case ELFAbs64:
     return "ELFAbs64";
+  case ELFPrel32:
+    return "ELFPrel32";
+  case ELFPrel64:
+    return "ELFPrel64";
   case ELFAdrGOTPage21:
     return "ELFAdrGOTPage21";
   case ELFLd64GOTLo12:
