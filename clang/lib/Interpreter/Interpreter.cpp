@@ -180,12 +180,13 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
                                                    *TSCtx->getContext(), Err);
 }
 
-Interpreter::~Interpreter() {}
-
-llvm::Error Interpreter::CleanUp() {
-  if (IncrExecutor)
-    return IncrExecutor->cleanUp();
-  return llvm::Error::success();
+Interpreter::~Interpreter() {
+  if (IncrExecutor) {
+    if (llvm::Error Err = IncrExecutor->cleanUp())
+      llvm::report_fatal_error(
+          llvm::Twine("Failed to clean up IncrementalExecutor: ") +
+          toString(std::move(Err)));
+  }
 }
 
 llvm::Expected<std::unique_ptr<Interpreter>>

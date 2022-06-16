@@ -68,7 +68,6 @@ public:
       return Execute(*PTU);
     return llvm::Error::success();
   }
-  llvm::Error CleanUp();
 
   /// \returns the \c JITTargetAddress of a \c GlobalDecl. This interface uses
   /// the CodeGenModule's internal mangling cache to avoid recomputing the
