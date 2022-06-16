@@ -52,6 +52,10 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
 
 IncrementalExecutor::~IncrementalExecutor() {}
 
+llvm::Error IncrementalExecutor::cleanUp() {
+  return Jit->deinitialize(Jit->getMainJITDylib());
+}
+
 llvm::Error IncrementalExecutor::addModule(std::unique_ptr<llvm::Module> M) {
   return Jit->addIRModule(llvm::orc::ThreadSafeModule(std::move(M), TSCtx));
 }
