@@ -182,6 +182,13 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
 
 Interpreter::~Interpreter() {}
 
+llvm::Error Interpreter::CleanUp() {
+  if (IncrExecutor) {
+    return IncrExecutor->cleanUp();
+  }
+  return llvm::Error::success();
+}
+
 llvm::Expected<std::unique_ptr<Interpreter>>
 Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
   llvm::Error Err = llvm::Error::success();

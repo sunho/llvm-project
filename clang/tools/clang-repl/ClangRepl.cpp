@@ -99,6 +99,8 @@ int main(int argc, const char **argv) {
     }
   }
 
+  ExitOnErr(Interp->CleanUp());
+
   // Our error handler depends on the Diagnostics object, which we're
   // potentially about to delete. Uninstall the handler now so that any
   // later errors use the default handling behavior instead.
