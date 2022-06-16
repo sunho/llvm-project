@@ -40,21 +40,21 @@ class IncrementalParser {
   /// Long-lived, incremental parsing action.
   std::unique_ptr<IncrementalAction> Act;
 
-  /// Compiler instance performing the incremental compilation.
-  std::unique_ptr<CompilerInstance> CI;
+  /// List containing every information about every incrementally parsed piece
+  /// of code.
+  std::list<PartialTranslationUnit> PTUs;
 
   /// Parser.
   std::unique_ptr<Parser> P;
+
+  /// Compiler instance performing the incremental compilation.
+  std::unique_ptr<CompilerInstance> CI;
 
   /// Consumer to process the produced top level decls. Owned by Act.
   ASTConsumer *Consumer = nullptr;
 
   /// Counts the number of direct user input lines that have been parsed.
   unsigned InputCount = 0;
-
-  /// List containing every information about every incrementally parsed piece
-  /// of code.
-  std::list<PartialTranslationUnit> PTUs;
 
 public:
   IncrementalParser(std::unique_ptr<CompilerInstance> Instance,
