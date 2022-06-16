@@ -1,3 +1,4 @@
+// clang-format off
 // RUN: clang-repl "int i = 10;" 'extern "C" int printf(const char*,...);' \
 // RUN:            'auto r1 = printf("i = %d\n", i);' | FileCheck --check-prefix=CHECK-DRIVER %s
 // REQUIRES: host-supports-jit
@@ -14,7 +15,7 @@ struct S { float f = 1.0; S *m = nullptr;} s;
 auto r2 = printf("S[f=%f, m=0x%llx]\n", s.f, reinterpret_cast<unsigned long long>(s.m));
 // CHECK-NEXT: S[f=1.000000, m=0x0]
 
-struct D { float f = 1.0; S *m = nullptr; D(){} ~D() {printf("D[f=%f, m=0x%llx]\n", f, reinterpret_cast<unsigned long long>(m)); }} d;
+struct D { float f = 1.0; D *m = nullptr; D(){} ~D() { printf("D[f=%f, m=0x%llx]\n", f, reinterpret_cast<unsigned long long>(m)); }} d;
 // CHECK: D[f=1.000000, m=0x0]
 
 quit
