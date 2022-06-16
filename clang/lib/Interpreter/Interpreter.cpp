@@ -183,9 +183,8 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
 Interpreter::~Interpreter() {}
 
 llvm::Error Interpreter::CleanUp() {
-  if (IncrExecutor) {
+  if (IncrExecutor)
     return IncrExecutor->cleanUp();
-  }
   return llvm::Error::success();
 }
 
