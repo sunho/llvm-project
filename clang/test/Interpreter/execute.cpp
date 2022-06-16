@@ -13,4 +13,8 @@ struct S { float f = 1.0; S *m = nullptr;} s;
 
 auto r2 = printf("S[f=%f, m=0x%llx]\n", s.f, reinterpret_cast<unsigned long long>(s.m));
 // CHECK-NEXT: S[f=1.000000, m=0x0]
+
+struct D { float f = 1.0; S *m = nullptr; D(){} ~D() {printf("D[f=%f, m=0x%llx]\n", f, reinterpret_cast<unsigned long long>(m)); }} d;
+// CHECK: D[f=1.000000, m=0x0]
+
 quit
