@@ -195,14 +195,19 @@ Error LocalCXXRuntimeOverrides::enable(JITDylib &JD,
   return JD.define(absoluteSymbols(std::move(RuntimeInterposes)));
 }
 
-void ItaniumCXAAtExitSupport::registerAtExit(void (*F)(void *), void *Ctx,
-                                             void *DSOHandle) {
+void ItaniumCXAAtExitSupport::registerCxaAtExit(void (*F)(void *), void *Ctx,
+                                                void *DSOHandle) {
   std::lock_guard<std::mutex> Lock(AtExitsMutex);
-  AtExitRecords[DSOHandle].push_back({F, Ctx});
+  AtExitRecords[DSOHandle].push_back([F, Ctx]() { F(Ctx); });
+}
+
+void ItaniumCXAAtExitSupport::registerAtExit(void (*F)(void), void *DSOHandle) {
+  std::lock_guard<std::mutex> Lock(AtExitsMutex);
+  AtExitRecords[DSOHandle].push_back(F);
 }
 
 void ItaniumCXAAtExitSupport::runAtExits(void *DSOHandle) {
-  std::vector<AtExitRecord> AtExitsToRun;
+  std::vector<AtExitHandler> AtExitsToRun;
 
   {
     std::lock_guard<std::mutex> Lock(AtExitsMutex);
@@ -213,9 +218,8 @@ void ItaniumCXAAtExitSupport::runAtExits(void *DSOHandle) {
     }
   }
 
-  while (!AtExitsToRun.empty()) {
-    AtExitsToRun.back().F(AtExitsToRun.back().Ctx);
-    AtExitsToRun.pop_back();
+  for (auto I = AtExitsToRun.rbegin(); I != AtExitsToRun.rend(); ++I) {
+    (*I)();
   }
 }
 
