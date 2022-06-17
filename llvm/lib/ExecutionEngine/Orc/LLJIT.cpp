@@ -430,8 +430,8 @@ private:
       dbgs() << "Registering cxa atexit function " << (void *)F << " for JD "
              << (*static_cast<JITDylib **>(DSOHandle))->getName() << "\n";
     });
-    static_cast<GenericLLVMIRPlatformSupport *>(Self)
-        ->AtExitMgr.registerCxaAtExit(F, Ctx, DSOHandle);
+    static_cast<GenericLLVMIRPlatformSupport *>(Self)->AtExitMgr.registerAtExit(
+        F, Ctx, DSOHandle);
   }
 
   static void registerAtExitHelper(void *Self, void *DSOHandle, void (*F)()) {
@@ -440,7 +440,7 @@ private:
              << (*static_cast<JITDylib **>(DSOHandle))->getName() << "\n";
     });
     static_cast<GenericLLVMIRPlatformSupport *>(Self)->AtExitMgr.registerAtExit(
-        F, DSOHandle);
+        reinterpret_cast<void (*)(void *)>(F), nullptr, DSOHandle);
   }
 
   static void runAtExitsHelper(void *Self, void *DSOHandle) {

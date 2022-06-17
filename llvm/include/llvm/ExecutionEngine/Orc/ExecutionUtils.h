@@ -192,18 +192,20 @@ public:
   Error enable(JITDylib &JD, MangleAndInterner &Mangler);
 };
 
-/// An interface for Itanium __cxa_atexit, atexit interposer implementations.
+/// An interface for Itanium __cxa_atexit interposer implementations.
 class ItaniumCXAAtExitSupport {
 public:
-  using AtExitHandler = std::function<void()>;
+  struct AtExitRecord {
+    void (*F)(void *);
+    void *Ctx;
+  };
 
-  void registerCxaAtExit(void (*F)(void *), void *Ctx, void *DSOHandle);
-  void registerAtExit(void (*F)(), void *DSOHandle);
+  void registerAtExit(void (*F)(void *), void *Ctx, void *DSOHandle);
   void runAtExits(void *DSOHandle);
 
 private:
   std::mutex AtExitsMutex;
-  DenseMap<void *, std::vector<AtExitHandler>> AtExitRecords;
+  DenseMap<void *, std::vector<AtExitRecord>> AtExitRecords;
 };
 
 /// A utility class to expose symbols found via dlsym to the JIT.
