@@ -145,9 +145,6 @@ public:
     StdInterposes[J.mangleAndIntern("__lljit.cxa_atexit_helper")] =
         JITEvaluatedSymbol(pointerToJITTargetAddress(registerCxaAtExitHelper),
                            JITSymbolFlags());
-    StdInterposes[J.mangleAndIntern("__lljit.atexit_helper")] =
-        JITEvaluatedSymbol(pointerToJITTargetAddress(registerAtExitHelper),
-                           JITSymbolFlags());
 
     cantFail(
         J.getMainJITDylib().define(absoluteSymbols(std::move(StdInterposes))));
@@ -164,6 +161,9 @@ public:
     SymbolMap PerJDInterposes;
     PerJDInterposes[J.mangleAndIntern("__lljit.run_atexits_helper")] =
         JITEvaluatedSymbol(pointerToJITTargetAddress(runAtExitsHelper),
+                           JITSymbolFlags());
+    PerJDInterposes[J.mangleAndIntern("__lljit.atexit_helper")] =
+        JITEvaluatedSymbol(pointerToJITTargetAddress(registerAtExitHelper),
                            JITSymbolFlags());
     cantFail(JD.define(absoluteSymbols(std::move(PerJDInterposes))));
 
