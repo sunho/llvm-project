@@ -14,12 +14,25 @@
 #include "EHFrameSupportImpl.h"
 #include "ELFLinkGraphBuilder.h"
 #include "JITLinkGeneric.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/ExecutionEngine/JITLink/DWARFRecordSectionSplitter.h"
 #include "llvm/ExecutionEngine/JITLink/aarch64.h"
+#include "llvm/MC/MCAsmInfo.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCDisassembler/MCDisassembler.h"
+#include "llvm/MC/MCInstPrinter.h"
+#include "llvm/MC/MCInstrAnalysis.h"
+#include "llvm/MC/MCInstrInfo.h"
+#include "llvm/MC/MCRegisterInfo.h"
+#include "llvm/MC/MCSubtargetInfo.h"
+#include "llvm/MC/MCTargetOptions.h"
+#include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MathExtras.h"
+
+#include <iostream>
 
 #define DEBUG_TYPE "jitlink"
 
@@ -64,6 +77,10 @@ private:
     ELFPrel64,
     ELFAdrGOTPage21,
     ELFLd64GOTLo12,
+    ELFTLSDescAdrPage21,
+    ELFTLSDescAddLo12,
+    ELFTLSDescLd64Lo12,
+    ELFTLSDescCall,
   };
 
   static Expected<ELFAArch64RelocationKind>
@@ -105,6 +122,14 @@ private:
       return ELFAdrGOTPage21;
     case ELF::R_AARCH64_LD64_GOT_LO12_NC:
       return ELFLd64GOTLo12;
+    case ELF::R_AARCH64_TLSDESC_ADR_PAGE21:
+      return ELFTLSDescAdrPage21;
+    case ELF::R_AARCH64_TLSDESC_ADD_LO12:
+      return ELFTLSDescAddLo12;
+    case ELF::R_AARCH64_TLSDESC_LD64_LO12:
+      return ELFTLSDescLd64Lo12;
+    case ELF::R_AARCH64_TLSDESC_CALL:
+      return ELFTLSDescCall;
     }
 
     return make_error<JITLinkError>(
@@ -293,6 +318,22 @@ private:
       Kind = aarch64::GOTPageOffset12;
       break;
     }
+    case ELFTLSDescAdrPage21: {
+      Kind = aarch64::TLSDescPage21;
+      break;
+    }
+    case ELFTLSDescAddLo12: {
+      Kind = aarch64::TLSDescPageOffset12;
+      break;
+    }
+    case ELFTLSDescLd64Lo12: {
+      Kind = aarch64::TLSDescPageOffset12;
+      break;
+    }
+    case ELFTLSDescCall: {
+      Kind = aarch64::Nop;
+      break;
+    }
     };
 
     Edge GE(Kind, Offset, *GraphSymbol, Addend);
@@ -343,6 +384,14 @@ private:
       return "ELFAdrGOTPage21";
     case ELFLd64GOTLo12:
       return "ELFLd64GOTLo12";
+    case ELFTLSDescAdrPage21:
+      return "ELFTLSDescAdrPage21";
+    case ELFTLSDescAddLo12:
+      return "ELFTLSDescAddLo12";
+    case ELFTLSDescLd64Lo12:
+      return "ELFTLSDescLd64Lo12";
+    case ELFTLSDescCall:
+      return "ELFTLSDescCall";
     default:
       return getGenericEdgeKindName(static_cast<Edge::Kind>(R));
     }
@@ -355,12 +404,210 @@ public:
                                   aarch64::getEdgeKindName) {}
 };
 
+// TLS Info Builder.
+class TLSInfoTableManager_ELF_aarch64
+    : public TableManager<TLSInfoTableManager_ELF_aarch64> {
+public:
+  static StringRef getSectionName() { return "$__TLSINFO"; }
+
+  static const uint8_t TLSInfoEntryContent[16];
+
+  bool visitEdge(LinkGraph &G, Block *B, Edge &E) { return false; }
+
+  Symbol &createEntry(LinkGraph &G, Symbol &Target) {
+    // the TLS Info entry's key value will be written by the fixTLVSectionByName
+    // pass, so create mutable content.
+    auto &TLSInfoEntry = G.createMutableContentBlock(
+        getTLSInfoSection(G), G.allocateContent(getTLSInfoEntryContent()),
+        orc::ExecutorAddr(), 8, 0);
+    TLSInfoEntry.addEdge(aarch64::Pointer64, 8, Target, 0);
+    return G.addAnonymousSymbol(TLSInfoEntry, 0, 16, false, false);
+  }
+
+private:
+  Section &getTLSInfoSection(LinkGraph &G) {
+    if (!TLSInfoTable)
+      TLSInfoTable = &G.createSection(getSectionName(), MemProt::Read);
+    return *TLSInfoTable;
+  }
+
+  ArrayRef<char> getTLSInfoEntryContent() const {
+    return {reinterpret_cast<const char *>(TLSInfoEntryContent),
+            sizeof(TLSInfoEntryContent)};
+  }
+
+  Section *TLSInfoTable = nullptr;
+};
+
+const uint8_t TLSInfoTableManager_ELF_aarch64::TLSInfoEntryContent[16] = {
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /*pthread key */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  /*data address*/
+};
+
+// TLS Descriptor Builder.
+class TLSDescTableManager_ELF_aarch64
+    : public TableManager<TLSDescTableManager_ELF_aarch64> {
+public:
+  TLSDescTableManager_ELF_aarch64(
+      TLSInfoTableManager_ELF_aarch64 &TLSInfoTableManager)
+      : TLSInfoTableManager(TLSInfoTableManager) {}
+
+  static StringRef getSectionName() { return "$__TLSDESC"; }
+
+  static const uint8_t TLSDescEntryContent[16];
+
+  bool visitEdge(LinkGraph &G, Block *B, Edge &E) {
+    Edge::Kind KindToSet = Edge::Invalid;
+    switch (E.getKind()) {
+    case aarch64::TLSDescPage21: {
+      KindToSet = aarch64::Page21;
+      break;
+    }
+    case aarch64::TLSDescPageOffset12: {
+      KindToSet = aarch64::PageOffset12;
+      break;
+    }
+    default:
+      return false;
+    }
+    assert(KindToSet != Edge::Invalid &&
+           "Fell through switch, but no new kind to set");
+    DEBUG_WITH_TYPE("jitlink", {
+      dbgs() << "  Fixing " << G.getEdgeKindName(E.getKind()) << " edge at "
+             << B->getFixupAddress(E) << " (" << B->getAddress() << " + "
+             << formatv("{0:x}", E.getOffset()) << ")\n";
+    });
+    E.setKind(KindToSet);
+    E.setTarget(getEntryForTarget(G, E.getTarget()));
+    return true;
+  }
+
+  Symbol &createEntry(LinkGraph &G, Symbol &Target) {
+    auto &EntryBlock =
+        G.createContentBlock(getTLSDescSection(G), getTLSDescBlockContent(),
+                             orc::ExecutorAddr(), 8, 0);
+    EntryBlock.addEdge(aarch64::Pointer64, 0, getTLSDescResolver(G), 0);
+    EntryBlock.addEdge(aarch64::Pointer64, 8,
+                       TLSInfoTableManager.getEntryForTarget(G, Target), 0);
+    return G.addAnonymousSymbol(EntryBlock, 0, 8, false, false);
+  }
+
+private:
+  Section &getTLSDescSection(LinkGraph &G) {
+    if (!GOTSection)
+      GOTSection = &G.createSection(getSectionName(), MemProt::Read);
+    return *GOTSection;
+  }
+
+  Symbol &getTLSDescResolver(LinkGraph &G) {
+    if (!TLSDescResolver)
+      TLSDescResolver =
+          &G.addExternalSymbol("__tlsdesc_resolver", 8, Linkage::Strong);
+    return *TLSDescResolver;
+  }
+
+  ArrayRef<char> getTLSDescBlockContent() {
+    return {reinterpret_cast<const char *>(TLSDescEntryContent),
+            sizeof(TLSDescEntryContent)};
+  }
+
+  Section *GOTSection = nullptr;
+  Symbol *TLSDescResolver = nullptr;
+  TLSInfoTableManager_ELF_aarch64 &TLSInfoTableManager;
+};
+
+const uint8_t TLSDescTableManager_ELF_aarch64::TLSDescEntryContent[16] = {
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, /*resolver function pointer*/
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00 /*pointer to tls info*/
+};
+
+// TLS descriptor is used by default for implementing TLVs in aarch64 *nix. With
+// TLS descriptor, linker is in charge of returning offset of thread local
+// variable allocation from the base of the TLS block. When accessing TLVs,
+// codegen emits code that gets thread pointer address from TPIDR_EL0 system
+// register and add the offset given by the linker via relocation to it. glibc
+// and ld-linux are responsible for allocating TLS block and setting thread
+// pointer to the address of TLS block. However, currently there is no public
+// libc api for dynamically adding new allocations to this TLS block.
+//
+// In order to support TLS descriptors, we simply iterate through instructions
+// of the blocks and do the following instruction patching.
+//
+// replace mrs <dest>, TPIDR_EL0 -> mov <dest>, xzr
+//
+// This way, tp + offset will become just offset. We can return the actual
+// address of TLVs as the offset after this.
+class ThreadPointerNullifier_aarch64 {
+public:
+  ThreadPointerNullifier_aarch64() {}
+
+  Error operator()(LinkGraph &G) {
+    LLVM_DEBUG(dbgs() << "Nullifying thread pointers:\n");
+
+    for (auto *B : G.blocks()) {
+      bool HasTLV = llvm::any_of(B->edges(), [](auto &E) {
+        return E.getKind() == aarch64::TLSDescPage21 ||
+               E.getKind() == aarch64::TLSDescPageOffset12;
+      });
+      // Skip the blocks that don't contain TLV access pattern
+      if (HasTLV) {
+        if (auto Err = processBlock(G, *B)) {
+          return Err;
+        }
+      }
+    }
+
+    return Error::success();
+  }
+
+private:
+  Error processBlock(LinkGraph &G, Block &B) {
+    using support::ulittle32_t;
+    LLVM_DEBUG(dbgs() << "    Iterating instructions at "
+                      << B.getSection().getName() << " + "
+                      << formatv("{0:x16}", B.getAddress()) << "\n");
+    BinaryStreamReader BlockReader(
+        StringRef(B.getContent().data(), B.getContent().size()),
+        G.getEndianness());
+
+    char *BlockContentBase = B.getMutableContent(G).data();
+    while (!BlockReader.empty()) {
+      uint64_t Offset = BlockReader.getOffset();
+
+      uint32_t Instr;
+      if (auto Err = BlockReader.readInteger(Instr))
+        return Err;
+
+      constexpr uint32_t MRSTPIDRMask = 0xffffffe0;
+      constexpr uint32_t MovXzrInstr = 0xaa1f03e0;
+      if ((Instr & MRSTPIDRMask) == 0xd53bd040) {
+        LLVM_DEBUG(dbgs() << "        Patching MRS instruction at "
+                          << B.getSection().getName() << " + "
+                          << formatv("{0:x16}", B.getAddress() + Offset)
+                          << "\n");
+
+        const uint32_t DstReg = Instr & 0x1f;
+        const uint32_t NewInstr = MovXzrInstr | DstReg;
+        ulittle32_t *TargetInstr =
+            reinterpret_cast<ulittle32_t *>(BlockContentBase + Offset);
+        *TargetInstr = NewInstr;
+      }
+    }
+
+    return Error::success();
+  }
+};
+
 Error buildTables_ELF_aarch64(LinkGraph &G) {
   LLVM_DEBUG(dbgs() << "Visiting edges in graph:\n");
 
   aarch64::GOTTableManager GOT;
   aarch64::PLTTableManager PLT(GOT);
-  visitExistingEdges(G, GOT, PLT);
+  TLSInfoTableManager_ELF_aarch64 TLSInfo;
+  TLSDescTableManager_ELF_aarch64 TLSDesc(TLSInfo);
+  visitExistingEdges(G, GOT, PLT, TLSDesc, TLSInfo);
   return Error::success();
 }
 
@@ -407,7 +654,8 @@ void link_ELF_aarch64(std::unique_ptr<LinkGraph> G,
     else
       Config.PrePrunePasses.push_back(markAllSymbolsLive);
 
-    // Add an in-place GOT/Stubs build pass.
+    // Add an in-place GOT/TLS/Stubs build pass.
+    Config.PostPrunePasses.push_back(ThreadPointerNullifier_aarch64());
     Config.PostPrunePasses.push_back(buildTables_ELF_aarch64);
   }
 

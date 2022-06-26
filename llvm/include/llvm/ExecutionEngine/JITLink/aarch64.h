@@ -22,7 +22,8 @@ namespace jitlink {
 namespace aarch64 {
 
 enum EdgeKind_aarch64 : Edge::Kind {
-  Branch26 = Edge::FirstRelocation,
+  Nop = Edge::FirstRelocation,
+  Branch26,
   Pointer32,
   Pointer64,
   Pointer64Anon,
@@ -31,8 +32,8 @@ enum EdgeKind_aarch64 : Edge::Kind {
   MoveWide16,
   GOTPage21,
   GOTPageOffset12,
-  TLVPage21,
-  TLVPageOffset12,
+  TLSDescPage21,
+  TLSDescPageOffset12,
   PointerToGOT,
   PairedAddend,
   LDRLiteral19,
@@ -222,9 +223,12 @@ inline Error applyFixup(LinkGraph &G, Block &B, const Edge &E) {
       *(little64_t *)FixupPtr = Value;
     break;
   }
-  case TLVPage21:
+  case Nop: {
+    break;
+  }
+  case TLSDescPage21:
+  case TLSDescPageOffset12:
   case GOTPage21:
-  case TLVPageOffset12:
   case GOTPageOffset12:
   case PointerToGOT: {
     return make_error<JITLinkError>(
@@ -257,13 +261,11 @@ public:
     const char *FixupPtr = BlockWorkingMem + E.getOffset();
 
     switch (E.getKind()) {
-    case aarch64::GOTPage21:
-    case aarch64::TLVPage21: {
+    case aarch64::GOTPage21: {
       KindToSet = aarch64::Page21;
       break;
     }
-    case aarch64::GOTPageOffset12:
-    case aarch64::TLVPageOffset12: {
+    case aarch64::GOTPageOffset12: {
       KindToSet = aarch64::PageOffset12;
       uint32_t RawInstr = *(const support::ulittle32_t *)FixupPtr;
       (void)RawInstr;

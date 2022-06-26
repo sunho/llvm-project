@@ -380,9 +380,8 @@ private:
 
           if (*MachORelocKind == MachOPage21) {
             Kind = aarch64::Page21;
-          } else if (*MachORelocKind == MachOTLVPage21) {
-            Kind = aarch64::TLVPage21;
-          } else if (*MachORelocKind == MachOGOTPage21) {
+          } else if (*MachORelocKind == MachOTLVPage21 ||
+                     *MachORelocKind == MachOGOTPage21) {
             Kind = aarch64::GOTPage21;
           }
           break;
@@ -412,11 +411,7 @@ private:
                                             "immediate instruction with a zero "
                                             "addend");
 
-          if (*MachORelocKind == MachOTLVPageOffset12) {
-            Kind = aarch64::TLVPageOffset12;
-          } else if (*MachORelocKind == MachOGOTPageOffset12) {
-            Kind = aarch64::GOTPageOffset12;
-          }
+          Kind = aarch64::GOTPageOffset12;
           break;
         }
         case MachOPointerToGOT:
