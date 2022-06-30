@@ -2910,7 +2910,11 @@ Error ExecutionSession::OL_notifyResolved(MaterializationResponsibility &MR,
 #ifndef NDEBUG
   for (auto &KV : Symbols) {
     auto WeakFlags = JITSymbolFlags::Weak | JITSymbolFlags::Common;
+    dbgs() << KV.first << "\n";
+
+    dbgs() << KV.second.getFlags() << "\n";
     auto I = MR.SymbolFlags.find(KV.first);
+    dbgs() << I->second << "\n";
     assert(I != MR.SymbolFlags.end() &&
            "Resolving symbol outside this responsibility set");
     assert(!I->second.hasMaterializationSideEffectsOnly() &&

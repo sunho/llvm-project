@@ -1085,7 +1085,7 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
       Err = P.takeError();
       return;
     }
-  } else if (!TT.isOSWindows() && !TT.isOSBinFormatMachO()) {
+  } else if (!TT.isOSBinFormatCOFF() && !TT.isOSBinFormatMachO()) {
     if (!NoExec)
       ObjLayer.addPlugin(std::make_unique<EHFrameRegistrationPlugin>(
           ES, ExitOnErr(EPCEHFrameRegistrar::Create(this->ES))));
@@ -1143,6 +1143,9 @@ void Session::modifyPassConfig(const Triple &TT,
 
       if (EPC.getTargetTriple().getObjectFormat() == Triple::MachO)
         return registerMachOGraphInfo(*this, G);
+
+      if (EPC.getTargetTriple().getObjectFormat() == Triple::COFF)
+        return registerCOFFGraphInfo(*this, G);
 
       return make_error<StringError>("Unsupported object format for GOT/stub "
                                      "registration",
@@ -1252,6 +1255,7 @@ static Triple getFirstFileTriple() {
     assert(!InputFiles.empty() && "InputFiles can not be empty");
     for (auto InputFile : InputFiles) {
       auto ObjBuffer = ExitOnErr(getFile(InputFile));
+      auto kk = identify_magic(ObjBuffer->getBuffer());
       switch (identify_magic(ObjBuffer->getBuffer())) {
       case file_magic::elf_relocatable:
       case file_magic::macho_object:
