@@ -118,18 +118,6 @@ public:
     return *this;
   }
 
-  /// If set, this RTDyldObjectLinkingLayer instance will claim responsibility
-  /// for any weak hidden symbols provided by a given object file that were not
-  /// already in the MaterializationResponsibility instance. Setting this flag
-  /// allows to expose certain weak hidden symbols inserted later in the MC
-  /// pipeline. A notalbe example is DW.ref. symbols which are emitted as weak
-  /// hidden in ppc linux enviornment. (i.e. DW.ref.__gxx_personality_v0)
-  RTDyldObjectLinkingLayer &setAutoClaimResponsibilityForWeakHiddenSymbols(
-      bool AutoClaimWeakHiddenSymbols) {
-    this->AutoClaimWeakHiddenSymbols = AutoClaimWeakHiddenSymbols;
-    return *this;
-  }
-
   /// Register a JITEventListener.
   void registerJITEventListener(JITEventListener &L);
 
@@ -162,7 +150,6 @@ private:
   bool ProcessAllSections = false;
   bool OverrideObjectFlags = false;
   bool AutoClaimObjectSymbols = false;
-  bool AutoClaimWeakHiddenSymbols = false;
   DenseMap<ResourceKey, std::vector<MemoryManagerUP>> MemMgrs;
   std::vector<JITEventListener *> EventListeners;
 };

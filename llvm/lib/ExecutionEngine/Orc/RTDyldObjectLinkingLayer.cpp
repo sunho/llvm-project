@@ -129,11 +129,10 @@ void RTDyldObjectLinkingLayer::emit(
         return;
       }
 
-      // Try to claim responsibility of weak hidden symbols
-      // if AutoClaimWeakHiddenSymbols flag is set.
-      if (AutoClaimWeakHiddenSymbols &&
-          (*SymFlagsOrErr & object::BasicSymbolRef::SF_Weak) &&
-          (*SymFlagsOrErr & object::BasicSymbolRef::SF_Hidden)) {
+      // Try to claim responsibility of weak symbols
+      // if AutoClaimObjectSymbols flag is set.
+      if (AutoClaimObjectSymbols &&
+          (*SymFlagsOrErr & object::BasicSymbolRef::SF_Weak)) {
         auto SymName = Sym.getName();
         if (!SymName) {
           ES.reportError(SymName.takeError());
