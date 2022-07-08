@@ -21,6 +21,8 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 
+#include "IncrementalDiagnosticBuffer.h"
+
 #include <list>
 #include <memory>
 namespace llvm {
@@ -57,16 +59,21 @@ class IncrementalParser {
   std::list<PartialTranslationUnit> PTUs;
 
 public:
+  using ReceiveAdditionalLine = std::function<llvm::Optional<std::string>()>;
   IncrementalParser(std::unique_ptr<CompilerInstance> Instance,
+                    IncrementalDiagnosticBuffer &DiagsBuffer,
                     llvm::LLVMContext &LLVMCtx, llvm::Error &Err);
   ~IncrementalParser();
 
   const CompilerInstance *getCI() const { return CI.get(); }
 
   /// Parses incremental input by creating an in-memory file.
-  ///\returns a \c PartialTranslationUnit which holds information about the
+  ///\param RecvLine a callback that will be called to get additional lines
+  ///required to finish parsing. \returns a \c PartialTranslationUnit which
+  ///holds information about the
   /// \c TranslationUnitDecl and \c llvm::Module corresponding to the input.
-  llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Input);
+  llvm::Expected<PartialTranslationUnit &>
+  Parse(llvm::StringRef Input, ReceiveAdditionalLine RecvLine = nullptr);
 
   /// Uses the CodeGenModule mangled name cache and avoids recomputing.
   ///\returns the mangled name of a \c GD.
@@ -78,6 +85,10 @@ public:
 
 private:
   llvm::Expected<PartialTranslationUnit &> ParseOrWrapTopLevelDecl();
+  llvm::Expected<FileID>
+  ReceiveCompleteSourceInput(ReceiveAdditionalLine RecvLine,
+                             StringRef InitialCode, StringRef SourceName);
+  IncrementalDiagnosticBuffer &DiagsBuffer;
 };
 } // end namespace clang
 

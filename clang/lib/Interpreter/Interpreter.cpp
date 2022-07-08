@@ -74,8 +74,9 @@ CreateCI(const llvm::opt::ArgStringList &Argv) {
   // Buffer diagnostics from argument parsing so that we can output them using
   // a well formed diagnostic object.
   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
-  TextDiagnosticBuffer *DiagsBuffer = new TextDiagnosticBuffer;
-  DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagsBuffer);
+  TextDiagnosticBuffer *TextDiagsBuffer = new TextDiagnosticBuffer;
+  DiagnosticsEngine Diags(DiagID, &*DiagOpts, TextDiagsBuffer);
+
   bool Success = CompilerInvocation::CreateFromArgs(
       Clang->getInvocation(), llvm::makeArrayRef(Argv.begin(), Argv.size()),
       Diags);
@@ -87,13 +88,14 @@ CreateCI(const llvm::opt::ArgStringList &Argv) {
         CompilerInvocation::GetResourcesPath(Argv[0], nullptr);
 
   // Create the actual diagnostics engine.
-  Clang->createDiagnostics();
+  IncrementalDiagnosticBuffer *DiagsBuffer =
+      new IncrementalDiagnosticBuffer(*DiagOpts);
+  Clang->createDiagnostics(DiagsBuffer);
   if (!Clang->hasDiagnostics())
     return llvm::createStringError(llvm::errc::not_supported,
                                    "Initialization failed. "
                                    "Unable to create diagnostics engine");
-
-  DiagsBuffer->FlushDiagnostics(Clang->getDiagnostics());
+  TextDiagsBuffer->FlushDiagnostics(Clang->getDiagnostics());
   if (!Success)
     return llvm::createStringError(llvm::errc::not_supported,
                                    "Initialization failed. "
@@ -179,8 +181,11 @@ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
   llvm::ErrorAsOutParameter EAO(&Err);
   auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
   TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::move(LLVMCtx));
-  IncrParser = std::make_unique<IncrementalParser>(std::move(CI),
-                                                   *TSCtx->getContext(), Err);
+  IncrParser = std::make_unique<IncrementalParser>(
+      std::move(CI),
+      reinterpret_cast<IncrementalDiagnosticBuffer &>(
+          CI->getDiagnosticClient()),
+      *TSCtx->getContext(), Err);
 }
 
 Interpreter::~Interpreter() {}
@@ -206,8 +211,8 @@ const llvm::orc::LLJIT *Interpreter::getExecutionEngine() const {
 }
 
 llvm::Expected<PartialTranslationUnit &>
-Interpreter::Parse(llvm::StringRef Code) {
-  return IncrParser->Parse(Code);
+Interpreter::Parse(llvm::StringRef Code, ReceiveAdditionalLine RecvLine) {
+  return IncrParser->Parse(Code, RecvLine);
 }
 
 llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
