@@ -1,0 +1,1284 @@
+diff --git a/clang/include/clang/Interpreter/Interpreter.h b/clang/include/clang/Interpreter/Interpreter.h
+index fd22af976613..dbd62c05733a 100644
+--- a/clang/include/clang/Interpreter/Interpreter.h
++++ b/clang/include/clang/Interpreter/Interpreter.h
+@@ -1,91 +1,98 @@
+ //===--- Interpreter.h - Incremental Compilation and Execution---*- C++ -*-===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ // This file defines the component which performs incremental code
+ // compilation and execution.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+ #ifndef LLVM_CLANG_INTERPRETER_INTERPRETER_H
+ #define LLVM_CLANG_INTERPRETER_INTERPRETER_H
+ 
+ #include "clang/Interpreter/PartialTranslationUnit.h"
+ 
+ #include "clang/AST/GlobalDecl.h"
+ 
+ #include "llvm/ExecutionEngine/JITSymbol.h"
+ #include "llvm/Support/Error.h"
+ 
+ #include <memory>
+ #include <vector>
+ 
+ namespace llvm {
+ namespace orc {
+ class LLJIT;
+ class ThreadSafeContext;
+ }
+ } // namespace llvm
+ 
+ namespace clang {
+ 
+ class CompilerInstance;
+ class IncrementalExecutor;
+ class IncrementalParser;
+ 
+ /// Create a pre-configured \c CompilerInstance for incremental processing.
+ class IncrementalCompilerBuilder {
+ public:
+   static llvm::Expected<std::unique_ptr<CompilerInstance>>
+   create(std::vector<const char *> &ClangArgv);
+ };
+ 
+ /// Provides top-level interfaces for incremental compilation and execution.
+ class Interpreter {
+   std::unique_ptr<llvm::orc::ThreadSafeContext> TSCtx;
+   std::unique_ptr<IncrementalParser> IncrParser;
+   std::unique_ptr<IncrementalExecutor> IncrExecutor;
+ 
+   Interpreter(std::unique_ptr<CompilerInstance> CI, llvm::Error &Err);
+ 
+ public:
++  using ReceiveAdditionalLine = std::function<llvm::Optional<std::string>()>;
+   ~Interpreter();
+   static llvm::Expected<std::unique_ptr<Interpreter>>
+   create(std::unique_ptr<CompilerInstance> CI);
+   const CompilerInstance *getCompilerInstance() const;
+   const llvm::orc::LLJIT *getExecutionEngine() const;
+-  llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Code);
++  ///\param RecvLine a callback that will be called to get additional lines
++  ///required to finish parsing.
++  llvm::Expected<PartialTranslationUnit &>
++  Parse(llvm::StringRef Code, ReceiveAdditionalLine RecvLine = nullptr);
+   llvm::Error Execute(PartialTranslationUnit &T);
+-  llvm::Error ParseAndExecute(llvm::StringRef Code) {
+-    auto PTU = Parse(Code);
++  ///\param RecvLine a callback that will be called to get additional lines
++  ///required to finish parsing.
++  llvm::Error ParseAndExecute(llvm::StringRef Code,
++                              ReceiveAdditionalLine RecvLine = nullptr) {
++    auto PTU = Parse(Code, RecvLine);
+     if (!PTU)
+       return PTU.takeError();
+     if (PTU->TheModule)
+       return Execute(*PTU);
+     return llvm::Error::success();
+   }
+ 
+   /// Undo N previous incremental inputs.
+   llvm::Error Undo(unsigned N = 1);
+ 
+   /// \returns the \c JITTargetAddress of a \c GlobalDecl. This interface uses
+   /// the CodeGenModule's internal mangling cache to avoid recomputing the
+   /// mangled name.
+   llvm::Expected<llvm::JITTargetAddress> getSymbolAddress(GlobalDecl GD) const;
+ 
+   /// \returns the \c JITTargetAddress of a given name as written in the IR.
+   llvm::Expected<llvm::JITTargetAddress>
+   getSymbolAddress(llvm::StringRef IRName) const;
+ 
+   /// \returns the \c JITTargetAddress of a given name as written in the object
+   /// file.
+   llvm::Expected<llvm::JITTargetAddress>
+   getSymbolAddressFromLinkerName(llvm::StringRef LinkerName) const;
+ };
+ } // namespace clang
+ 
+ #endif // LLVM_CLANG_INTERPRETER_INTERPRETER_H
+diff --git a/clang/lib/Interpreter/IncrementalDiagnosticBuffer.h b/clang/lib/Interpreter/IncrementalDiagnosticBuffer.h
+new file mode 100644
+index 000000000000..bc75291fa70a
+--- /dev/null
++++ b/clang/lib/Interpreter/IncrementalDiagnosticBuffer.h
+@@ -0,0 +1,86 @@
++//===-- IncrementalDiagnosticBuffer.h - Incremental Diagnostics --*- C++
++//-*-===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// This file implements the class which collects diagnostics messages.
++//
++//===----------------------------------------------------------------------===//
++
++#ifndef LLVM_CLANG_LIB_INTERPRETER_INCREMENTALDIAGNOSTICBUFFER_H
++#define LLVM_CLANG_LIB_INTERPRETER_INCREMENTALDIAGNOSTICBUFFER_H
++
++#include "clang/Basic/DiagnosticLex.h"
++#include "clang/Frontend/TextDiagnosticPrinter.h"
++
++#include "llvm/Support/Error.h"
++
++namespace clang {
++
++/// Collect diagnostics messages to buffer that can be flushed or
++/// cleared based on the circumstances.
++/// While collecting diagnostics messages, this looks whether
++/// certain interesting diagnostic kinds have happend.
++class IncrementalDiagnosticBuffer : public DiagnosticConsumer {
++public:
++  IncrementalDiagnosticBuffer(DiagnosticOptions &DiagOpts)
++      : TextStream(TextBuffer),
++        TextPrinter(
++            std::make_unique<TextDiagnosticPrinter>(TextStream, &DiagOpts)) {}
++  ~IncrementalDiagnosticBuffer() = default;
++
++  /// Whether err_pp_unterminated_conditional has happend since the last
++  /// flush/clear. If true, it indicates that #ifdef or #if directive was not
++  /// finished off by #endif.
++  bool HasTruncatedConditionalDirective() const {
++    return TruncatedConditionalDirective;
++  }
++
++  /// Clear the collected diagnostic messages.
++  void ClearDiagnostics() {
++    TruncatedConditionalDirective = false;
++    TextBuffer.clear();
++  }
++
++  /// Get the collected diagnostic messages as a string buffer.
++  /// This also clears the collected diagnostic message buffer.
++  std::string FlushDiagnostics() {
++    std::string Result = std::move(TextBuffer);
++    ClearDiagnostics();
++    return Result;
++  }
++
++  void HandleDiagnostic(DiagnosticsEngine::Level DiagLevel,
++                        const Diagnostic &Info) override {
++    switch (Info.getID()) {
++    case diag::err_pp_unterminated_conditional: {
++      TruncatedConditionalDirective = true;
++      break;
++    }
++    default:
++      break;
++    }
++    TextPrinter->HandleDiagnostic(DiagLevel, Info);
++  }
++
++  void BeginSourceFile(const clang::LangOptions &LO,
++                       const clang::Preprocessor *PP) override {
++    TextPrinter->BeginSourceFile(LO, PP);
++  }
++
++  void EndSourceFile() override { TextPrinter->EndSourceFile(); }
++
++private:
++  bool TruncatedConditionalDirective = false;
++  std::string TextBuffer;
++  llvm::raw_string_ostream TextStream;
++  std::unique_ptr<TextDiagnosticPrinter> TextPrinter;
++};
++
++} // namespace clang
++
++#endif
+\ No newline at end of file
+diff --git a/clang/lib/Interpreter/IncrementalParser.cpp b/clang/lib/Interpreter/IncrementalParser.cpp
+index db854c4161b4..80ab7331d6fa 100644
+--- a/clang/lib/Interpreter/IncrementalParser.cpp
++++ b/clang/lib/Interpreter/IncrementalParser.cpp
+@@ -1,305 +1,390 @@
+ //===--------- IncrementalParser.cpp - Incremental Compilation  -----------===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ // This file implements the class which performs incremental code compilation.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+ #include "IncrementalParser.h"
+ 
+ #include "clang/AST/DeclContextInternals.h"
+ #include "clang/CodeGen/BackendUtil.h"
+ #include "clang/CodeGen/CodeGenAction.h"
+ #include "clang/CodeGen/ModuleBuilder.h"
+ #include "clang/Frontend/CompilerInstance.h"
+ #include "clang/Frontend/FrontendAction.h"
+ #include "clang/FrontendTool/Utils.h"
+ #include "clang/Parse/Parser.h"
+ #include "clang/Sema/Sema.h"
+ 
+ #include "llvm/Option/ArgList.h"
+ #include "llvm/Support/CrashRecoveryContext.h"
+ #include "llvm/Support/Error.h"
+ #include "llvm/Support/Timer.h"
+ 
+ #include <sstream>
+ 
+ namespace clang {
+ 
+ /// A custom action enabling the incremental processing functionality.
+ ///
+ /// The usual \p FrontendAction expects one call to ExecuteAction and once it
+ /// sees a call to \p EndSourceFile it deletes some of the important objects
+ /// such as \p Preprocessor and \p Sema assuming no further input will come.
+ ///
+ /// \p IncrementalAction ensures it keep its underlying action's objects alive
+ /// as long as the \p IncrementalParser needs them.
+ ///
+ class IncrementalAction : public WrapperFrontendAction {
+ private:
+   bool IsTerminating = false;
+ 
+ public:
+   IncrementalAction(CompilerInstance &CI, llvm::LLVMContext &LLVMCtx,
+                     llvm::Error &Err)
+       : WrapperFrontendAction([&]() {
+           llvm::ErrorAsOutParameter EAO(&Err);
+           std::unique_ptr<FrontendAction> Act;
+           switch (CI.getFrontendOpts().ProgramAction) {
+           default:
+             Err = llvm::createStringError(
+                 std::errc::state_not_recoverable,
+                 "Driver initialization failed. "
+                 "Incremental mode for action %d is not supported",
+                 CI.getFrontendOpts().ProgramAction);
+             return Act;
+           case frontend::ASTDump:
+             LLVM_FALLTHROUGH;
+           case frontend::ASTPrint:
+             LLVM_FALLTHROUGH;
+           case frontend::ParseSyntaxOnly:
+             Act = CreateFrontendAction(CI);
+             break;
+           case frontend::PluginAction:
+             LLVM_FALLTHROUGH;
+           case frontend::EmitAssembly:
+             LLVM_FALLTHROUGH;
+           case frontend::EmitObj:
+             LLVM_FALLTHROUGH;
+           case frontend::EmitLLVMOnly:
+             Act.reset(new EmitLLVMOnlyAction(&LLVMCtx));
+             break;
+           }
+           return Act;
+         }()) {}
+   FrontendAction *getWrapped() const { return WrappedAction.get(); }
+   TranslationUnitKind getTranslationUnitKind() override {
+     return TU_Incremental;
+   }
+   void ExecuteAction() override {
+     CompilerInstance &CI = getCompilerInstance();
+     assert(CI.hasPreprocessor() && "No PP!");
+ 
+     // FIXME: Move the truncation aspect of this into Sema, we delayed this till
+     // here so the source manager would be initialized.
+     if (hasCodeCompletionSupport() &&
+         !CI.getFrontendOpts().CodeCompletionAt.FileName.empty())
+       CI.createCodeCompletionConsumer();
+ 
+     // Use a code completion consumer?
+     CodeCompleteConsumer *CompletionConsumer = nullptr;
+     if (CI.hasCodeCompletionConsumer())
+       CompletionConsumer = &CI.getCodeCompletionConsumer();
+ 
+     Preprocessor &PP = CI.getPreprocessor();
+     PP.enableIncrementalProcessing();
+     PP.EnterMainSourceFile();
+ 
+     if (!CI.hasSema())
+       CI.createSema(getTranslationUnitKind(), CompletionConsumer);
+   }
+ 
+   // Do not terminate after processing the input. This allows us to keep various
+   // clang objects alive and to incrementally grow the current TU.
+   void EndSourceFile() override {
+     // The WrappedAction can be nullptr if we issued an error in the ctor.
+     if (IsTerminating && getWrapped())
+       WrapperFrontendAction::EndSourceFile();
+   }
+ 
+   void FinalizeAction() {
+     assert(!IsTerminating && "Already finalized!");
+     IsTerminating = true;
+     EndSourceFile();
+   }
+ };
+ 
+ IncrementalParser::IncrementalParser(std::unique_ptr<CompilerInstance> Instance,
++                                     IncrementalDiagnosticBuffer &DiagsBuffer,
+                                      llvm::LLVMContext &LLVMCtx,
+                                      llvm::Error &Err)
+-    : CI(std::move(Instance)) {
++    : CI(std::move(Instance)), DiagsBuffer(DiagsBuffer) {
+   llvm::ErrorAsOutParameter EAO(&Err);
+   Act = std::make_unique<IncrementalAction>(*CI, LLVMCtx, Err);
+   if (Err)
+     return;
+   CI->ExecuteAction(*Act);
+   Consumer = &CI->getASTConsumer();
+   P.reset(
+       new Parser(CI->getPreprocessor(), CI->getSema(), /*SkipBodies=*/false));
+   P->Initialize();
+ }
+ 
+ IncrementalParser::~IncrementalParser() {
+   P.reset();
+   Act->FinalizeAction();
+ }
+ 
+ llvm::Expected<PartialTranslationUnit &>
+ IncrementalParser::ParseOrWrapTopLevelDecl() {
+   // Recover resources if we crash before exiting this method.
+   Sema &S = CI->getSema();
+   llvm::CrashRecoveryContextCleanupRegistrar<Sema> CleanupSema(&S);
+   Sema::GlobalEagerInstantiationScope GlobalInstantiations(S, /*Enabled=*/true);
+   Sema::LocalEagerInstantiationScope LocalInstantiations(S);
+ 
+   PTUs.emplace_back(PartialTranslationUnit());
+   PartialTranslationUnit &LastPTU = PTUs.back();
+   // Add a new PTU.
+   ASTContext &C = S.getASTContext();
+   C.addTranslationUnitDecl();
+   LastPTU.TUPart = C.getTranslationUnitDecl();
+ 
+   // Skip previous eof due to last incremental input.
+   if (P->getCurToken().is(tok::eof)) {
+     P->ConsumeToken();
+     // FIXME: Clang does not call ExitScope on finalizing the regular TU, we
+     // might want to do that around HandleEndOfTranslationUnit.
+     P->ExitScope();
+     S.CurContext = nullptr;
+     // Start a new PTU.
+     P->EnterScope(Scope::DeclScope);
+     S.ActOnTranslationUnitScope(P->getCurScope());
+   }
+ 
+   Parser::DeclGroupPtrTy ADecl;
+   Sema::ModuleImportState ImportState;
+   for (bool AtEOF = P->ParseFirstTopLevelDecl(ADecl, ImportState); !AtEOF;
+        AtEOF = P->ParseTopLevelDecl(ADecl, ImportState)) {
+     // If we got a null return and something *was* parsed, ignore it.  This
+     // is due to a top-level semicolon, an action override, or a parse error
+     // skipping something.
+     if (ADecl && !Consumer->HandleTopLevelDecl(ADecl.get()))
+-      return llvm::make_error<llvm::StringError>("Parsing failed. "
+-                                                 "The consumer rejected a decl",
+-                                                 std::error_code());
++      return llvm::make_error<llvm::StringError>(
++          (llvm::Twine("Parsing failed. "
++                       "The consumer rejected a decl\n") +
++           DiagsBuffer.FlushDiagnostics())
++              .str(),
++          std::error_code());
+   }
+ 
+   DiagnosticsEngine &Diags = getCI()->getDiagnostics();
+   if (Diags.hasErrorOccurred()) {
+     PartialTranslationUnit MostRecentPTU = {C.getTranslationUnitDecl(),
+                                             nullptr};
+     CleanUpPTU(MostRecentPTU);
+ 
+     Diags.Reset(/*soft=*/true);
+     Diags.getClient()->clear();
+-    return llvm::make_error<llvm::StringError>("Parsing failed.",
+-                                               std::error_code());
++    return llvm::make_error<llvm::StringError>(
++        (llvm::Twine("Parsing failed. \n") + DiagsBuffer.FlushDiagnostics())
++            .str(),
++        std::error_code());
+   }
+ 
+   // Process any TopLevelDecls generated by #pragma weak.
+   for (Decl *D : S.WeakTopLevelDecls()) {
+     DeclGroupRef DGR(D);
+     Consumer->HandleTopLevelDecl(DGR);
+   }
+ 
+   LocalInstantiations.perform();
+   GlobalInstantiations.perform();
+ 
+   Consumer->HandleTranslationUnit(C);
+ 
+   return LastPTU;
+ }
+ 
+ static CodeGenerator *getCodeGen(FrontendAction *Act) {
+   IncrementalAction *IncrAct = static_cast<IncrementalAction *>(Act);
+   FrontendAction *WrappedAct = IncrAct->getWrapped();
+   if (!WrappedAct->hasIRSupport())
+     return nullptr;
+   return static_cast<CodeGenAction *>(WrappedAct)->getCodeGenerator();
+ }
+ 
+-llvm::Expected<PartialTranslationUnit &>
+-IncrementalParser::Parse(llvm::StringRef input) {
+-  Preprocessor &PP = CI->getPreprocessor();
+-  assert(PP.isIncrementalProcessingEnabled() && "Not in incremental mode!?");
+-
+-  std::ostringstream SourceName;
+-  SourceName << "input_line_" << InputCount++;
+-
++static std::unique_ptr<llvm::MemoryBuffer>
++CreateMemoryBuffer(llvm::StringRef SourceName, llvm::StringRef Str) {
+   // Create an uninitialized memory buffer, copy code in and append "\n"
+-  size_t InputSize = input.size(); // don't include trailing 0
++  size_t StrSize = Str.size(); // don't include trailing 0
+   // MemBuffer size should *not* include terminating zero
+   std::unique_ptr<llvm::MemoryBuffer> MB(
+-      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(InputSize + 1,
+-                                                        SourceName.str()));
++      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(StrSize + 1,
++                                                        SourceName));
+   char *MBStart = const_cast<char *>(MB->getBufferStart());
+-  memcpy(MBStart, input.data(), InputSize);
+-  MBStart[InputSize] = '\n';
++  memcpy(MBStart, Str.data(), StrSize);
++  MBStart[StrSize] = '\n';
++  return MB;
++}
+ 
++// If RecvLine is not null, this will repeatedly call RecvLine function to fetch
++// the additional lines required to finish a cut-off multiline function
++// definition.
++llvm::Expected<FileID>
++IncrementalParser::ReceiveCompleteSourceInput(ReceiveAdditionalLine RecvLine,
++                                              StringRef InitialCode,
++                                              StringRef SourceName) {
++  // FIXME: Optimize this to O(n) by teaching Lexer to ask for additional bytes.
++  // FIXME: Support string literal cutoff.
++  Preprocessor &PP = CI->getPreprocessor();
+   SourceManager &SM = CI->getSourceManager();
+-
+-  // FIXME: Create SourceLocation, which will allow clang to order the overload
+-  // candidates for example
++  DiagnosticsEngine &Diags = getCI()->getDiagnostics();
+   SourceLocation NewLoc = SM.getLocForStartOfFile(SM.getMainFileID());
+ 
+-  // Create FileID for the current buffer.
+-  FileID FID = SM.createFileID(std::move(MB), SrcMgr::C_User, /*LoadedID=*/0,
+-                               /*LoadedOffset=*/0, NewLoc);
++  // Buffer holding collected source code
++  auto CodeBuffer = InitialCode.str();
++  CodeBuffer += '\n';
++
++  while (true) {
++    // Create FileID for the current buffer.
++    FileID FID = SM.createFileID(llvm::MemoryBufferRef(CodeBuffer, ""),
++                                 SrcMgr::C_User, /*LoadedID=*/0,
++                                 /*LoadedOffset=*/0, NewLoc);
++    if (PP.EnterSourceFile(FID, /*DirLookup=*/nullptr, NewLoc))
++      return llvm::make_error<llvm::StringError>("Parsing failed. "
++                                                 "Cannot enter source file.",
++                                                 std::error_code());
+ 
+-  // NewLoc only used for diags.
+-  if (PP.EnterSourceFile(FID, /*DirLookup=*/nullptr, NewLoc))
++    // Count brace level to determine if additional lines are needed.
++    Token Tok;
++    unsigned BraceLevel = 0;
++    do {
++      PP.Lex(Tok);
++      if (Tok.getKind() == tok::l_brace)
++        ++BraceLevel;
++      else if (Tok.getKind() == tok::r_brace) {
++        if (BraceLevel == 0)
++          return llvm::make_error<llvm::StringError>("Parsing failed. "
++                                                     "Unmathced braces.",
++                                                     std::error_code());
++        --BraceLevel;
++      }
++    } while (Tok.isNot(tok::eof));
++    PP.EndSourceFile();
++
++    if (BraceLevel != 0 || DiagsBuffer.HasTruncatedConditionalDirective()) {
++      // We can't finish off the function definition either because of
++      // truncated #ifdef/if directive or lacking closing braces.
++      // Try to get additional lines.
++
++      // If we can't fetch additional lines, this is just an error.
++      if (!RecvLine)
++        return llvm::make_error<llvm::StringError>("Parsing failed. "
++                                                   "Unmathced braces.",
++                                                   std::error_code());
++
++      // Clear the diagnostic messages that might contain incorrect
++      // diagnostics.
++      Diags.Reset(/*soft=*/true);
++      Diags.getClient()->clear();
++      DiagsBuffer.ClearDiagnostics();
++
++      // Fetch additional lines.
++      if (auto Line = RecvLine()) {
++        CodeBuffer += *Line;
++        CodeBuffer += '\n';
++      } else
++        return llvm::make_error<llvm::StringError>("Parsing failed. "
++                                                   "Truncated code.",
++                                                   std::error_code());
++    } else {
++      // Brace count is sane and it has no truncated #ifdef/if directive.
++      // We're good to go.
++      break;
++    }
++  }
++  return SM.createFileID(CreateMemoryBuffer(SourceName, CodeBuffer),
++                         SrcMgr::C_User, /*LoadedID=*/0,
++                         /*LoadedOffset=*/0, NewLoc);
++}
++
++llvm::Expected<PartialTranslationUnit &>
++IncrementalParser::Parse(llvm::StringRef Input,
++                         ReceiveAdditionalLine RecvLine) {
++  Preprocessor &PP = CI->getPreprocessor();
++  assert(PP.isIncrementalProcessingEnabled() && "Not in incremental mode!?");
++
++  auto SourceName = ("input_line_" + llvm::Twine(InputCount++)).str();
++
++  SourceManager &SM = CI->getSourceManager();
++  auto FID = ReceiveCompleteSourceInput(RecvLine, Input, SourceName);
++  if (!FID)
++    return FID.takeError();
++
++  SourceLocation NewLoc = SM.getLocForStartOfFile(SM.getMainFileID());
++  if (PP.EnterSourceFile(*FID, /*DirLookup=*/nullptr, NewLoc))
+     return llvm::make_error<llvm::StringError>("Parsing failed. "
+                                                "Cannot enter source file.",
+                                                std::error_code());
+-
+   auto PTU = ParseOrWrapTopLevelDecl();
+   if (!PTU)
+     return PTU.takeError();
+ 
+   if (PP.getLangOpts().DelayedTemplateParsing) {
+     // Microsoft-specific:
+     // Late parsed templates can leave unswallowed "macro"-like tokens.
+     // They will seriously confuse the Parser when entering the next
+     // source file. So lex until we are EOF.
+     Token Tok;
+     do {
+       PP.Lex(Tok);
+     } while (Tok.isNot(tok::eof));
+   }
+ 
+   Token AssertTok;
+   PP.Lex(AssertTok);
+   assert(AssertTok.is(tok::eof) &&
+          "Lexer must be EOF when starting incremental parse!");
+ 
+   if (CodeGenerator *CG = getCodeGen(Act.get())) {
+     std::unique_ptr<llvm::Module> M(CG->ReleaseModule());
+     CG->StartModule("incr_module_" + std::to_string(PTUs.size()),
+                     M->getContext());
+ 
+     PTU->TheModule = std::move(M);
+   }
+ 
+   return PTU;
+ }
+ 
+ void IncrementalParser::CleanUpPTU(PartialTranslationUnit &PTU) {
+   TranslationUnitDecl *MostRecentTU = PTU.TUPart;
+   TranslationUnitDecl *FirstTU = MostRecentTU->getFirstDecl();
+   if (StoredDeclsMap *Map = FirstTU->getPrimaryContext()->getLookupPtr()) {
+     for (auto I = Map->begin(); I != Map->end(); ++I) {
+       StoredDeclsList &List = I->second;
+       DeclContextLookupResult R = List.getLookupResult();
+       for (NamedDecl *D : R) {
+         if (D->getTranslationUnitDecl() == MostRecentTU) {
+           List.remove(D);
+         }
+       }
+       if (List.isNull())
+         Map->erase(I);
+     }
+   }
+ }
+ 
+ llvm::StringRef IncrementalParser::GetMangledName(GlobalDecl GD) const {
+   CodeGenerator *CG = getCodeGen(Act.get());
+   assert(CG);
+   return CG->GetMangledName(GD);
+ }
+ 
+ } // end namespace clang
+diff --git a/clang/lib/Interpreter/IncrementalParser.h b/clang/lib/Interpreter/IncrementalParser.h
+index 8e45d6b5931b..ac4f13f5c2d8 100644
+--- a/clang/lib/Interpreter/IncrementalParser.h
++++ b/clang/lib/Interpreter/IncrementalParser.h
+@@ -1,84 +1,95 @@
+ //===--- IncrementalParser.h - Incremental Compilation ----------*- C++ -*-===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ // This file implements the class which performs incremental code compilation.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+ #ifndef LLVM_CLANG_LIB_INTERPRETER_INCREMENTALPARSER_H
+ #define LLVM_CLANG_LIB_INTERPRETER_INCREMENTALPARSER_H
+ 
+ #include "clang/Interpreter/PartialTranslationUnit.h"
+ 
+ #include "clang/AST/GlobalDecl.h"
+ 
+ #include "llvm/ADT/ArrayRef.h"
+ #include "llvm/ADT/StringRef.h"
+ #include "llvm/Support/Error.h"
+ 
++#include "IncrementalDiagnosticBuffer.h"
++
+ #include <list>
+ #include <memory>
+ namespace llvm {
+ class LLVMContext;
+ }
+ 
+ namespace clang {
+ class ASTConsumer;
+ class CompilerInstance;
+ class IncrementalAction;
+ class Parser;
+ 
+ /// Provides support for incremental compilation. Keeps track of the state
+ /// changes between the subsequent incremental input.
+ ///
+ class IncrementalParser {
+   /// Long-lived, incremental parsing action.
+   std::unique_ptr<IncrementalAction> Act;
+ 
+   /// Compiler instance performing the incremental compilation.
+   std::unique_ptr<CompilerInstance> CI;
+ 
+   /// Parser.
+   std::unique_ptr<Parser> P;
+ 
+   /// Consumer to process the produced top level decls. Owned by Act.
+   ASTConsumer *Consumer = nullptr;
+ 
+   /// Counts the number of direct user input lines that have been parsed.
+   unsigned InputCount = 0;
+ 
+   /// List containing every information about every incrementally parsed piece
+   /// of code.
+   std::list<PartialTranslationUnit> PTUs;
+ 
+ public:
++  using ReceiveAdditionalLine = std::function<llvm::Optional<std::string>()>;
+   IncrementalParser(std::unique_ptr<CompilerInstance> Instance,
++                    IncrementalDiagnosticBuffer &DiagsBuffer,
+                     llvm::LLVMContext &LLVMCtx, llvm::Error &Err);
+   ~IncrementalParser();
+ 
+   const CompilerInstance *getCI() const { return CI.get(); }
+ 
+   /// Parses incremental input by creating an in-memory file.
+-  ///\returns a \c PartialTranslationUnit which holds information about the
++  ///\param RecvLine a callback that will be called to get additional lines
++  ///required to finish parsing. \returns a \c PartialTranslationUnit which
++  ///holds information about the
+   /// \c TranslationUnitDecl and \c llvm::Module corresponding to the input.
+-  llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Input);
++  llvm::Expected<PartialTranslationUnit &>
++  Parse(llvm::StringRef Input, ReceiveAdditionalLine RecvLine = nullptr);
+ 
+   /// Uses the CodeGenModule mangled name cache and avoids recomputing.
+   ///\returns the mangled name of a \c GD.
+   llvm::StringRef GetMangledName(GlobalDecl GD) const;
+ 
+   void CleanUpPTU(PartialTranslationUnit &PTU);
+ 
+   std::list<PartialTranslationUnit> &getPTUs() { return PTUs; }
+ 
+ private:
+   llvm::Expected<PartialTranslationUnit &> ParseOrWrapTopLevelDecl();
++  llvm::Expected<FileID>
++  ReceiveCompleteSourceInput(ReceiveAdditionalLine RecvLine,
++                             StringRef InitialCode, StringRef SourceName);
++  IncrementalDiagnosticBuffer &DiagsBuffer;
+ };
+ } // end namespace clang
+ 
+ #endif // LLVM_CLANG_LIB_INTERPRETER_INCREMENTALPARSER_H
+diff --git a/clang/lib/Interpreter/Interpreter.cpp b/clang/lib/Interpreter/Interpreter.cpp
+index 0191ad78581d..a88681383e55 100644
+--- a/clang/lib/Interpreter/Interpreter.cpp
++++ b/clang/lib/Interpreter/Interpreter.cpp
+@@ -1,281 +1,286 @@
+ //===------ Interpreter.cpp - Incremental Compilation and Execution -------===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ // This file implements the component which performs incremental code
+ // compilation and execution.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+ #include "clang/Interpreter/Interpreter.h"
+ 
+ #include "IncrementalExecutor.h"
+ #include "IncrementalParser.h"
+ 
+ #include "clang/AST/ASTContext.h"
+ #include "clang/Basic/TargetInfo.h"
+ #include "clang/CodeGen/ModuleBuilder.h"
+ #include "clang/CodeGen/ObjectFilePCHContainerOperations.h"
+ #include "clang/Driver/Compilation.h"
+ #include "clang/Driver/Driver.h"
+ #include "clang/Driver/Job.h"
+ #include "clang/Driver/Options.h"
+ #include "clang/Driver/Tool.h"
+ #include "clang/Frontend/CompilerInstance.h"
+ #include "clang/Frontend/TextDiagnosticBuffer.h"
+ #include "clang/Lex/PreprocessorOptions.h"
+ 
+ #include "llvm/IR/Module.h"
+ #include "llvm/Support/Errc.h"
+ #include "llvm/Support/Host.h"
+ 
+ using namespace clang;
+ 
+ // FIXME: Figure out how to unify with namespace init_convenience from
+ //        tools/clang-import-test/clang-import-test.cpp
+ namespace {
+ /// Retrieves the clang CC1 specific flags out of the compilation's jobs.
+ /// \returns NULL on error.
+ static llvm::Expected<const llvm::opt::ArgStringList *>
+ GetCC1Arguments(DiagnosticsEngine *Diagnostics,
+                 driver::Compilation *Compilation) {
+   // We expect to get back exactly one Command job, if we didn't something
+   // failed. Extract that job from the Compilation.
+   const driver::JobList &Jobs = Compilation->getJobs();
+   if (!Jobs.size() || !isa<driver::Command>(*Jobs.begin()))
+     return llvm::createStringError(llvm::errc::not_supported,
+                                    "Driver initialization failed. "
+                                    "Unable to create a driver job");
+ 
+   // The one job we find should be to invoke clang again.
+   const driver::Command *Cmd = cast<driver::Command>(&(*Jobs.begin()));
+   if (llvm::StringRef(Cmd->getCreator().getName()) != "clang")
+     return llvm::createStringError(llvm::errc::not_supported,
+                                    "Driver initialization failed");
+ 
+   return &Cmd->getArguments();
+ }
+ 
+ static llvm::Expected<std::unique_ptr<CompilerInstance>>
+ CreateCI(const llvm::opt::ArgStringList &Argv) {
+   std::unique_ptr<CompilerInstance> Clang(new CompilerInstance());
+   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
+ 
+   // Register the support for object-file-wrapped Clang modules.
+   // FIXME: Clang should register these container operations automatically.
+   auto PCHOps = Clang->getPCHContainerOperations();
+   PCHOps->registerWriter(std::make_unique<ObjectFilePCHContainerWriter>());
+   PCHOps->registerReader(std::make_unique<ObjectFilePCHContainerReader>());
+ 
+   // Buffer diagnostics from argument parsing so that we can output them using
+   // a well formed diagnostic object.
+   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts = new DiagnosticOptions();
+-  TextDiagnosticBuffer *DiagsBuffer = new TextDiagnosticBuffer;
+-  DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagsBuffer);
++  TextDiagnosticBuffer *TextDiagsBuffer = new TextDiagnosticBuffer;
++  DiagnosticsEngine Diags(DiagID, &*DiagOpts, TextDiagsBuffer);
++
+   bool Success = CompilerInvocation::CreateFromArgs(
+       Clang->getInvocation(), llvm::makeArrayRef(Argv.begin(), Argv.size()),
+       Diags);
+ 
+   // Infer the builtin include path if unspecified.
+   if (Clang->getHeaderSearchOpts().UseBuiltinIncludes &&
+       Clang->getHeaderSearchOpts().ResourceDir.empty())
+     Clang->getHeaderSearchOpts().ResourceDir =
+         CompilerInvocation::GetResourcesPath(Argv[0], nullptr);
+ 
+   // Create the actual diagnostics engine.
+-  Clang->createDiagnostics();
++  IncrementalDiagnosticBuffer *DiagsBuffer =
++      new IncrementalDiagnosticBuffer(*DiagOpts);
++  Clang->createDiagnostics(DiagsBuffer);
+   if (!Clang->hasDiagnostics())
+     return llvm::createStringError(llvm::errc::not_supported,
+                                    "Initialization failed. "
+                                    "Unable to create diagnostics engine");
+-
+-  DiagsBuffer->FlushDiagnostics(Clang->getDiagnostics());
++  TextDiagsBuffer->FlushDiagnostics(Clang->getDiagnostics());
+   if (!Success)
+     return llvm::createStringError(llvm::errc::not_supported,
+                                    "Initialization failed. "
+                                    "Unable to flush diagnostics");
+ 
+   // FIXME: Merge with CompilerInstance::ExecuteAction.
+   llvm::MemoryBuffer *MB = llvm::MemoryBuffer::getMemBuffer("").release();
+   Clang->getPreprocessorOpts().addRemappedFile("<<< inputs >>>", MB);
+ 
+   Clang->setTarget(TargetInfo::CreateTargetInfo(
+       Clang->getDiagnostics(), Clang->getInvocation().TargetOpts));
+   if (!Clang->hasTarget())
+     return llvm::createStringError(llvm::errc::not_supported,
+                                    "Initialization failed. "
+                                    "Target is missing");
+ 
+   Clang->getTarget().adjust(Clang->getDiagnostics(), Clang->getLangOpts());
+ 
+   // Don't clear the AST before backend codegen since we do codegen multiple
+   // times, reusing the same AST.
+   Clang->getCodeGenOpts().ClearASTBeforeBackend = false;
+ 
+   Clang->getFrontendOpts().DisableFree = false;
+   Clang->getCodeGenOpts().DisableFree = false;
+ 
+   return std::move(Clang);
+ }
+ 
+ } // anonymous namespace
+ 
+ llvm::Expected<std::unique_ptr<CompilerInstance>>
+ IncrementalCompilerBuilder::create(std::vector<const char *> &ClangArgv) {
+ 
+   // If we don't know ClangArgv0 or the address of main() at this point, try
+   // to guess it anyway (it's possible on some platforms).
+   std::string MainExecutableName =
+       llvm::sys::fs::getMainExecutable(nullptr, nullptr);
+ 
+   ClangArgv.insert(ClangArgv.begin(), MainExecutableName.c_str());
+ 
+   // Prepending -c to force the driver to do something if no action was
+   // specified. By prepending we allow users to override the default
+   // action and use other actions in incremental mode.
+   // FIXME: Print proper driver diagnostics if the driver flags are wrong.
+   ClangArgv.insert(ClangArgv.begin() + 1, "-c");
+ 
+   if (!llvm::is_contained(ClangArgv, " -x")) {
+     // We do C++ by default; append right after argv[0] if no "-x" given
+     ClangArgv.push_back("-x");
+     ClangArgv.push_back("c++");
+   }
+ 
+   // Put a dummy C++ file on to ensure there's at least one compile job for the
+   // driver to construct.
+   ClangArgv.push_back("<<< inputs >>>");
+ 
+   // Buffer diagnostics from argument parsing so that we can output them using a
+   // well formed diagnostic object.
+   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
+   IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts =
+       CreateAndPopulateDiagOpts(ClangArgv);
+   TextDiagnosticBuffer *DiagsBuffer = new TextDiagnosticBuffer;
+   DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagsBuffer);
+ 
+   driver::Driver Driver(/*MainBinaryName=*/ClangArgv[0],
+                         llvm::sys::getProcessTriple(), Diags);
+   Driver.setCheckInputsExist(false); // the input comes from mem buffers
+   llvm::ArrayRef<const char *> RF = llvm::makeArrayRef(ClangArgv);
+   std::unique_ptr<driver::Compilation> Compilation(Driver.BuildCompilation(RF));
+ 
+   if (Compilation->getArgs().hasArg(driver::options::OPT_v))
+     Compilation->getJobs().Print(llvm::errs(), "\n", /*Quote=*/false);
+ 
+   auto ErrOrCC1Args = GetCC1Arguments(&Diags, Compilation.get());
+   if (auto Err = ErrOrCC1Args.takeError())
+     return std::move(Err);
+ 
+   return CreateCI(**ErrOrCC1Args);
+ }
+ 
+ Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
+                          llvm::Error &Err) {
+   llvm::ErrorAsOutParameter EAO(&Err);
+   auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
+   TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::move(LLVMCtx));
+-  IncrParser = std::make_unique<IncrementalParser>(std::move(CI),
+-                                                   *TSCtx->getContext(), Err);
++  IncrParser = std::make_unique<IncrementalParser>(
++      std::move(CI),
++      reinterpret_cast<IncrementalDiagnosticBuffer &>(
++          CI->getDiagnosticClient()),
++      *TSCtx->getContext(), Err);
+ }
+ 
+ Interpreter::~Interpreter() {}
+ 
+ llvm::Expected<std::unique_ptr<Interpreter>>
+ Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
+   llvm::Error Err = llvm::Error::success();
+   auto Interp =
+       std::unique_ptr<Interpreter>(new Interpreter(std::move(CI), Err));
+   if (Err)
+     return std::move(Err);
+   return std::move(Interp);
+ }
+ 
+ const CompilerInstance *Interpreter::getCompilerInstance() const {
+   return IncrParser->getCI();
+ }
+ 
+ const llvm::orc::LLJIT *Interpreter::getExecutionEngine() const {
+   if (IncrExecutor)
+     return IncrExecutor->getExecutionEngine();
+   return nullptr;
+ }
+ 
+ llvm::Expected<PartialTranslationUnit &>
+-Interpreter::Parse(llvm::StringRef Code) {
+-  return IncrParser->Parse(Code);
++Interpreter::Parse(llvm::StringRef Code, ReceiveAdditionalLine RecvLine) {
++  return IncrParser->Parse(Code, RecvLine);
+ }
+ 
+ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
+   assert(T.TheModule);
+   if (!IncrExecutor) {
+     const clang::TargetInfo &TI =
+         getCompilerInstance()->getASTContext().getTargetInfo();
+     llvm::Error Err = llvm::Error::success();
+     IncrExecutor = std::make_unique<IncrementalExecutor>(*TSCtx, Err, TI);
+ 
+     if (Err)
+       return Err;
+   }
+   // FIXME: Add a callback to retain the llvm::Module once the JIT is done.
+   if (auto Err = IncrExecutor->addModule(T))
+     return Err;
+ 
+   if (auto Err = IncrExecutor->runCtors())
+     return Err;
+ 
+   return llvm::Error::success();
+ }
+ 
+ llvm::Expected<llvm::JITTargetAddress>
+ Interpreter::getSymbolAddress(GlobalDecl GD) const {
+   if (!IncrExecutor)
+     return llvm::make_error<llvm::StringError>("Operation failed. "
+                                                "No execution engine",
+                                                std::error_code());
+   llvm::StringRef MangledName = IncrParser->GetMangledName(GD);
+   return getSymbolAddress(MangledName);
+ }
+ 
+ llvm::Expected<llvm::JITTargetAddress>
+ Interpreter::getSymbolAddress(llvm::StringRef IRName) const {
+   if (!IncrExecutor)
+     return llvm::make_error<llvm::StringError>("Operation failed. "
+                                                "No execution engine",
+                                                std::error_code());
+ 
+   return IncrExecutor->getSymbolAddress(IRName, IncrementalExecutor::IRName);
+ }
+ 
+ llvm::Expected<llvm::JITTargetAddress>
+ Interpreter::getSymbolAddressFromLinkerName(llvm::StringRef Name) const {
+   if (!IncrExecutor)
+     return llvm::make_error<llvm::StringError>("Operation failed. "
+                                                "No execution engine",
+                                                std::error_code());
+ 
+   return IncrExecutor->getSymbolAddress(Name, IncrementalExecutor::LinkerName);
+ }
+ 
+ llvm::Error Interpreter::Undo(unsigned N) {
+ 
+   std::list<PartialTranslationUnit> &PTUs = IncrParser->getPTUs();
+   if (N > PTUs.size())
+     return llvm::make_error<llvm::StringError>("Operation failed. "
+                                                "Too many undos",
+                                                std::error_code());
+   for (unsigned I = 0; I < N; I++) {
+     if (IncrExecutor) {
+       if (llvm::Error Err = IncrExecutor->removeModule(PTUs.back()))
+         return Err;
+     }
+ 
+     IncrParser->CleanUpPTU(PTUs.back());
+     PTUs.pop_back();
+   }
+   return llvm::Error::success();
+ }
+diff --git a/clang/test/Interpreter/multiline-func-macro-brace-error.cpp b/clang/test/Interpreter/multiline-func-macro-brace-error.cpp
+new file mode 100644
+index 000000000000..78d32c5bb051
+--- /dev/null
++++ b/clang/test/Interpreter/multiline-func-macro-brace-error.cpp
+@@ -0,0 +1,33 @@
++// REQUIRES: host-supports-jit
++// UNSUPPORTED: system-aix
++// RUN: cat %s | clang-repl 2>&1 | FileCheck %s
++// Check invalid brace counts are detected.
++// Brace counting is done to support multiline functions.
++extern "C" int printf(const char *, ...);
++
++#define ___DEFINED_SYMBOL
++
++int test_multiline_brace_count_error() {
++#ifdef ___UNDEFINED_SYMBOL
++  printf("Simple multiline brace count\n");
++#else
++}
++#endif
++}
++// CHECK: error: Parsing failed. Unmathced braces.
++
++#define A 1
++#define B 3
++#define C (A + B)
++#define D C
++
++int test_multiline_brace_count_complex_error() {
++#if A + B - 2 * C + D == 0
++}
++#else
++  printf("Complex multiline brace count\n");
++#endif
++}
++// CHECK-NEXT: error: Parsing failed. Unmathced braces.
++
++% quit
+diff --git a/clang/test/Interpreter/multiline-func-macro-brace.cpp b/clang/test/Interpreter/multiline-func-macro-brace.cpp
+new file mode 100644
+index 000000000000..911c456e6530
+--- /dev/null
++++ b/clang/test/Interpreter/multiline-func-macro-brace.cpp
+@@ -0,0 +1,53 @@
++// REQUIRES: host-supports-jit
++// UNSUPPORTED: system-aix
++// RUN: cat %s | clang-repl | FileCheck %s
++// Check a brace counting is not broken by introduction of macro directives.
++// Brace counting is done to support multiline functions.
++extern "C" int printf(const char *, ...);
++
++#define ___DEFINED_SYMBOL
++
++int test_multiline_brace_count_simple() {
++#ifdef ___UNDEFINED_SYMBOL
++  {
++#else
++  printf("Simple multiline brace count\n");
++#endif
++    return 0;
++  }
++  auto r1 = test_multiline_brace_count_simple();
++  // CHECK: Simple multiline brace count
++
++  int test_multiline_brace_count_defined() {
++#ifdef ___DEFINED_SYMBOL
++    printf("Defined multiline brace count\n");
++#else
++}
++}
++}
++}
++}
++}
++#endif
++    return 0;
++  }
++  auto r2 = test_multiline_brace_count_defined();
++  // CHECK-NEXT: Defined multiline brace count
++
++#define A 1
++#define B 3
++#define C (A + B)
++#define D C
++
++  int test_multiline_brace_count_complex() {
++#if A + B - 2 * C + D == 0
++    printf("Complex multiline brace count\n");
++#else
++  {
++#endif
++    return 0;
++  }
++  auto r3 = test_multiline_brace_count_complex();
++  // CHECK-NEXT: Complex multiline brace count
++
++  % quit
+diff --git a/clang/test/Interpreter/multiline-func.cpp b/clang/test/Interpreter/multiline-func.cpp
+new file mode 100644
+index 000000000000..7714366f9eac
+--- /dev/null
++++ b/clang/test/Interpreter/multiline-func.cpp
+@@ -0,0 +1,16 @@
++// REQUIRES: host-supports-jit
++// UNSUPPORTED: system-aix
++// RUN: cat %s | clang-repl | FileCheck %s
++// Check a multiline function is parsed and executed correctly.
++extern "C" int printf(const char *, ...);
++int test_multiline_function() {
++  printf("Multiline\n");
++  printf("Function\n");
++  return 0;
++}
++
++auto r1 = test_multiline_function();
++// CHECK: Multiline
++// CHECK-NEXT: Function
++
++% quit
+diff --git a/clang/tools/clang-repl/ClangRepl.cpp b/clang/tools/clang-repl/ClangRepl.cpp
+index 4f673bdcb7cc..ce1ada506b9d 100644
+--- a/clang/tools/clang-repl/ClangRepl.cpp
++++ b/clang/tools/clang-repl/ClangRepl.cpp
+@@ -1,133 +1,134 @@
+ //===--- tools/clang-repl/ClangRepl.cpp - clang-repl - the Clang REPL -----===//
+ //
+ // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+ // See https://llvm.org/LICENSE.txt for license information.
+ // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+ //
+ //===----------------------------------------------------------------------===//
+ //
+ //  This file implements a REPL tool on top of clang.
+ //
+ //===----------------------------------------------------------------------===//
+ 
+ #include "clang/Basic/Diagnostic.h"
+ #include "clang/Frontend/CompilerInstance.h"
+ #include "clang/Frontend/FrontendDiagnostic.h"
+ #include "clang/Interpreter/Interpreter.h"
+ 
+ #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+ #include "llvm/LineEditor/LineEditor.h"
+ #include "llvm/Support/CommandLine.h"
+ #include "llvm/Support/ManagedStatic.h" // llvm_shutdown
+ #include "llvm/Support/Signals.h"
+ #include "llvm/Support/TargetSelect.h" // llvm::Initialize*
+ 
+ static llvm::cl::list<std::string>
+     ClangArgs("Xcc",
+               llvm::cl::desc("Argument to pass to the CompilerInvocation"),
+               llvm::cl::CommaSeparated);
+ static llvm::cl::opt<bool> OptHostSupportsJit("host-supports-jit",
+                                               llvm::cl::Hidden);
+ static llvm::cl::list<std::string> OptInputs(llvm::cl::Positional,
+                                              llvm::cl::desc("[code to run]"));
+ 
+ static void LLVMErrorHandler(void *UserData, const char *Message,
+                              bool GenCrashDiag) {
+   auto &Diags = *static_cast<clang::DiagnosticsEngine *>(UserData);
+ 
+   Diags.Report(clang::diag::err_fe_error_backend) << Message;
+ 
+   // Run the interrupt handlers to make sure any special cleanups get done, in
+   // particular that we remove files registered with RemoveFileOnSignal.
+   llvm::sys::RunInterruptHandlers();
+ 
+   // We cannot recover from llvm errors.  When reporting a fatal error, exit
+   // with status 70 to generate crash diagnostics.  For BSD systems this is
+   // defined as an internal software error. Otherwise, exit with status 1.
+ 
+   exit(GenCrashDiag ? 70 : 1);
+ }
+ 
+ // If we are running with -verify a reported has to be returned as unsuccess.
+ // This is relevant especially for the test suite.
+ static int checkDiagErrors(const clang::CompilerInstance *CI) {
+   unsigned Errs = CI->getDiagnostics().getClient()->getNumErrors();
+   if (CI->getDiagnosticOpts().VerifyDiagnostics) {
+     // If there was an error that came from the verifier we must return 1 as
+     // an exit code for the process. This will make the test fail as expected.
+     clang::DiagnosticConsumer *Client = CI->getDiagnostics().getClient();
+     Client->EndSourceFile();
+     Errs = Client->getNumErrors();
+ 
+     // The interpreter expects BeginSourceFile/EndSourceFiles to be balanced.
+     Client->BeginSourceFile(CI->getLangOpts(), &CI->getPreprocessor());
+   }
+   return Errs ? EXIT_FAILURE : EXIT_SUCCESS;
+ }
+ 
+ llvm::ExitOnError ExitOnErr;
+ int main(int argc, const char **argv) {
+   ExitOnErr.setBanner("clang-repl: ");
+   llvm::cl::ParseCommandLineOptions(argc, argv);
+ 
+   std::vector<const char *> ClangArgv(ClangArgs.size());
+   std::transform(ClangArgs.begin(), ClangArgs.end(), ClangArgv.begin(),
+                  [](const std::string &s) -> const char * { return s.data(); });
+   llvm::InitializeNativeTarget();
+   llvm::InitializeNativeTargetAsmPrinter();
+ 
+   if (OptHostSupportsJit) {
+     auto J = llvm::orc::LLJITBuilder().create();
+     if (J)
+       llvm::outs() << "true\n";
+     else {
+       llvm::consumeError(J.takeError());
+       llvm::outs() << "false\n";
+     }
+     return 0;
+   }
+ 
+   // FIXME: Investigate if we could use runToolOnCodeWithArgs from tooling. It
+   // can replace the boilerplate code for creation of the compiler instance.
+   auto CI = ExitOnErr(clang::IncrementalCompilerBuilder::create(ClangArgv));
+ 
+   // Set an error handler, so that any LLVM backend diagnostics go through our
+   // error handler.
+   llvm::install_fatal_error_handler(LLVMErrorHandler,
+                                     static_cast<void *>(&CI->getDiagnostics()));
+ 
+   // Load any requested plugins.
+   CI->LoadRequestedPlugins();
+ 
+   auto Interp = ExitOnErr(clang::Interpreter::create(std::move(CI)));
+   for (const std::string &input : OptInputs) {
+     if (auto Err = Interp->ParseAndExecute(input))
+       llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+   }
+ 
+   if (OptInputs.empty()) {
+     llvm::LineEditor LE("clang-repl");
+     // FIXME: Add LE.setListCompleter
+     while (llvm::Optional<std::string> Line = LE.readLine()) {
+       if (*Line == R"(%quit)")
+         break;
+       if (*Line == R"(%undo)") {
+         if (auto Err = Interp->Undo())
+           llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+         continue;
+       }
+ 
+-      if (auto Err = Interp->ParseAndExecute(*Line))
++      if (auto Err =
++              Interp->ParseAndExecute(*Line, [&]() { return LE.readLine(); }))
+         llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+     }
+   }
+ 
+   // Our error handler depends on the Diagnostics object, which we're
+   // potentially about to delete. Uninstall the handler now so that any
+   // later errors use the default handling behavior instead.
+   llvm::remove_fatal_error_handler();
+ 
+   llvm::llvm_shutdown();
+ 
+   return checkDiagErrors(Interp->getCompilerInstance());
+ }

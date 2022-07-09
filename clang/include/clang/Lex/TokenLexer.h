@@ -21,7 +21,9 @@ namespace clang {
 class MacroArgs;
 class MacroInfo;
 class Preprocessor;
-class Token;
+template<typename LexerPtr>
+class GenericToken;
+using Token = GenericToken<const char*>;
 class VAOptExpansionContext;
 
 /// TokenLexer - This implements a lexer that returns tokens from a macro body

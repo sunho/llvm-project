@@ -20,6 +20,20 @@
 
 namespace clang {
 
+class GrowBuffer {
+  
+};
+
+class GrowBufferPtr {
+public:
+  GrowBufferPtr();
+  GrowBufferPtr(GrowBuffer& Buffer, unsigned Offset);
+  ~GrowBufferPtr() = default;
+
+private:
+  GrowBuffer* Buffer = nullptr;
+};
+
 class IdentifierInfo;
 
 /// Token - This structure provides full information about a lexed token.
@@ -31,7 +45,8 @@ class IdentifierInfo;
 /// tokens that were parsed and semantically resolved, e.g.: "foo::MyClass<int>"
 /// can be represented by a single typename annotation token that carries
 /// information about the SourceRange of the tokens and the type object.
-class Token {
+template<typename LexerPtr>
+class GenericToken {
   /// The location of the token. This is actually a SourceLocation.
   SourceLocation::UIntTy Loc;
 
@@ -327,6 +342,8 @@ struct PPConditionalInfo {
   /// \#elif/\#else directives are not allowed.
   bool FoundElse;
 };
+
+using Token = GenericToken<const char*>;
 
 } // end namespace clang
 

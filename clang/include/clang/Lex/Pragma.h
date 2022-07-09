@@ -23,7 +23,9 @@ namespace clang {
 
 class PragmaNamespace;
 class Preprocessor;
-class Token;
+template<typename LexerPtr>
+class GenericToken;
+using Token = GenericToken<const char*>;
 
   /**
    * Describes how the pragma was introduced, e.g., with \#pragma,

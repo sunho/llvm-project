@@ -75,7 +75,8 @@ struct PreambleBounds {
 /// stream of tokens.  This provides no support for file reading or buffering,
 /// or buffering/seeking of tokens, only forward lexing is supported.  It relies
 /// on the specified Preprocessor object to handle preprocessor directives, etc.
-class Lexer : public PreprocessorLexer {
+template<typename LexerPtr>
+class GenericLexer : public PreprocessorLexer {
   friend class Preprocessor;
 
   void anchor() override;
@@ -84,10 +85,10 @@ class Lexer : public PreprocessorLexer {
   // Constant configuration values for this lexer.
 
   // Start of the buffer.
-  const char *BufferStart;
+  LexerPtr BufferStart;
 
   // End of the buffer.
-  const char *BufferEnd;
+  LexerPtr BufferEnd;
 
   // Location for start of file.
   SourceLocation FileLoc;
@@ -128,7 +129,7 @@ class Lexer : public PreprocessorLexer {
 
   // BufferPtr - Current pointer into the buffer.  This is the next character
   // to be lexed.
-  const char *BufferPtr;
+  LexerPtr BufferPtr;
 
   // IsAtStartOfLine - True if the next lexed token should get the "start of
   // line" flag set on it.
@@ -145,7 +146,7 @@ class Lexer : public PreprocessorLexer {
 
   // NewLinePtr - A pointer to new line character '\n' being lexed. For '\r\n',
   // it also points to '\n.'
-  const char *NewLinePtr;
+  LexerPtr NewLinePtr;
 
   // CurrentConflictMarkerState - The kind of conflict marker we are handling.
   ConflictMarkerKind CurrentConflictMarkerState;
@@ -157,37 +158,37 @@ class Lexer : public PreprocessorLexer {
   /// next token to use from the current dependency directive.
   unsigned NextDepDirectiveTokenIndex = 0;
 
-  void InitLexer(const char *BufStart, const char *BufPtr, const char *BufEnd);
+  void InitLexer(LexerPtr BufStart, LexerPtr BufPtr, LexerPtr BufEnd);
 
 public:
-  /// Lexer constructor - Create a new lexer object for the specified buffer
+  /// GenericLexer constructor - Create a new lexer object for the specified buffer
   /// with the specified preprocessor managing the lexing process.  This lexer
   /// assumes that the associated file buffer and Preprocessor objects will
   /// outlive it, so it doesn't take ownership of either of them.
-  Lexer(FileID FID, const llvm::MemoryBufferRef &InputFile, Preprocessor &PP,
+  GenericLexer(FileID FID, const llvm::MemoryBufferRef &InputFile, Preprocessor &PP,
         bool IsFirstIncludeOfFile = true);
 
-  /// Lexer constructor - Create a new raw lexer object.  This object is only
+  /// GenericLexer constructor - Create a new raw lexer object.  This object is only
   /// suitable for calls to 'LexFromRawLexer'.  This lexer assumes that the
   /// text range will outlive it, so it doesn't take ownership of it.
-  Lexer(SourceLocation FileLoc, const LangOptions &LangOpts,
-        const char *BufStart, const char *BufPtr, const char *BufEnd,
+  GenericLexer(SourceLocation FileLoc, const LangOptions &LangOpts,
+        LexerPtr BufStart, LexerPtr BufPtr, LexerPtr BufEnd,
         bool IsFirstIncludeOfFile = true);
 
-  /// Lexer constructor - Create a new raw lexer object.  This object is only
+  /// GenericLexer constructor - Create a new raw lexer object.  This object is only
   /// suitable for calls to 'LexFromRawLexer'.  This lexer assumes that the
   /// text range will outlive it, so it doesn't take ownership of it.
-  Lexer(FileID FID, const llvm::MemoryBufferRef &FromFile,
+  GenericLexer(FileID FID, const llvm::MemoryBufferRef &FromFile,
         const SourceManager &SM, const LangOptions &LangOpts,
         bool IsFirstIncludeOfFile = true);
 
-  Lexer(const Lexer &) = delete;
-  Lexer &operator=(const Lexer &) = delete;
+  GenericLexer(const GenericLexer &) = delete;
+  GenericLexer &operator=(const GenericLexer &) = delete;
 
-  /// Create_PragmaLexer: Lexer constructor - Create a new lexer object for
+  /// Create_PragmaLexer: Generic constructor - Create a new lexer object for
   /// _Pragma expansion.  This has a variety of magic semantics that this method
-  /// sets up.  It returns a new'd Lexer that must be delete'd when done.
-  static Lexer *Create_PragmaLexer(SourceLocation SpellingLoc,
+  /// sets up.  It returns a new'd GenericLexer that must be delete'd when done.
+  static GenericLexer *Create_PragmaLexer(SourceLocation SpellingLoc,
                                    SourceLocation ExpansionLocStart,
                                    SourceLocation ExpansionLocEnd,
                                    unsigned TokLen, Preprocessor &PP);
@@ -201,14 +202,14 @@ public:
 private:
   /// Lex - Return the next token in the file.  If this is the end of file, it
   /// return the tok::eof token.  This implicitly involves the preprocessor.
-  bool Lex(Token &Result);
+  bool Lex(GenericToken<LexerPtr> &Result);
 
   /// Called when the preprocessor is in 'dependency scanning lexing mode'.
-  bool LexDependencyDirectiveToken(Token &Result);
+  bool LexDependencyDirectiveToken(GenericToken<LexerPtr> &Result);
 
   /// Called when the preprocessor is in 'dependency scanning lexing mode' and
   /// is skipping a conditional block.
-  bool LexDependencyDirectiveTokenWhileSkipping(Token &Result);
+  bool LexDependencyDirectiveTokenWhileSkipping(GenericToken<LexerPtr> &Result);
 
   /// True when the preprocessor is in 'dependency scanning lexing mode' and
   /// created this \p Lexer for lexing a set of dependency directive tokens.
@@ -218,7 +219,7 @@ private:
   /// the position just after the token.
   /// \returns the buffer pointer at the beginning of the token.
   const char *convertDependencyDirectiveToken(
-      const dependency_directives_scan::Token &DDTok, Token &Result);
+      const dependency_directives_scan::Token &DDTok, GenericLexer<LexerPtr> &Result);
 
 public:
   /// isPragmaLexer - Returns true if this Lexer is being used to lex a pragma.
@@ -227,13 +228,13 @@ public:
 private:
   /// IndirectLex - An indirect call to 'Lex' that can be invoked via
   ///  the PreprocessorLexer interface.
-  void IndirectLex(Token &Result) override { Lex(Result); }
+  void IndirectLex(GenericToken<LexerPtr> &Result) override { Lex(Result); }
 
 public:
   /// LexFromRawLexer - Lex a token from a designated raw lexer (one with no
   /// associated preprocessor object.  Return true if the 'next character to
   /// read' pointer points at the end of the lexer buffer, false otherwise.
-  bool LexFromRawLexer(Token &Result) {
+  bool LexFromRawLexer(GenericToken<LexerPtr> &Result) {
     assert(LexingRawMode && "Not already in raw mode!");
     Lex(Result);
     // Note that lexing to the end of the buffer doesn't implicitly delete the
@@ -292,11 +293,11 @@ public:
 
   /// Diag - Forwarding function for diagnostics.  This translate a source
   /// position in the current buffer into a SourceLocation object for rendering.
-  DiagnosticBuilder Diag(const char *Loc, unsigned DiagID) const;
+  DiagnosticBuilder Diag(LexerPtr Loc, unsigned DiagID) const;
 
   /// getSourceLocation - Return a source location identifier for the specified
   /// offset in the current file.
-  SourceLocation getSourceLocation(const char *Loc, unsigned TokLen = 1) const;
+  SourceLocation getSourceLocation(LexerPtr Loc, unsigned TokLen = 1) const;
 
   /// getSourceLocation - Return a source location for the next character in
   /// the current file.
@@ -305,7 +306,7 @@ public:
   }
 
   /// Return the current location in the buffer.
-  const char *getBufferLocation() const { return BufferPtr; }
+  LexerPtr getBufferLocation() const { return BufferPtr; }
 
   /// Returns the current lexing offset.
   unsigned getCurrentBufferOffset() {
@@ -335,7 +336,7 @@ public:
   /// to point to a constant buffer with the data already in it (avoiding a
   /// copy).  The caller is not allowed to modify the returned buffer pointer
   /// if an internal buffer is returned.
-  static unsigned getSpelling(const Token &Tok, const char *&Buffer,
+  static unsigned getSpelling(const GenericToken<LexerPtr> &Tok, const char *&Buffer,
                               const SourceManager &SourceMgr,
                               const LangOptions &LangOpts,
                               bool *Invalid = nullptr);
@@ -345,7 +346,7 @@ public:
   /// after trigraph expansion and escaped-newline folding.  In particular, this
   /// wants to get the true, uncanonicalized, spelling of things like digraphs
   /// UCNs, etc.
-  static std::string getSpelling(const Token &Tok,
+  static std::string getSpelling(const GenericToken<LexerPtr> &Tok,
                                  const SourceManager &SourceMgr,
                                  const LangOptions &LangOpts,
                                  bool *Invalid = nullptr);
@@ -374,7 +375,7 @@ public:
 
   /// Relex the token at the specified location.
   /// \returns true if there was a failure, false on success.
-  static bool getRawToken(SourceLocation Loc, Token &Result,
+  static bool getRawToken(SourceLocation Loc, GenericToken<LexerPtr> &Result,
                           const SourceManager &SM,
                           const LangOptions &LangOpts,
                           bool IgnoreWhiteSpace = false);
@@ -605,18 +606,18 @@ private:
   /// LexTokenInternal - Internal interface to lex a preprocessing token. Called
   /// by Lex.
   ///
-  bool LexTokenInternal(Token &Result, bool TokAtPhysicalStartOfLine);
+  bool LexTokenInternal(GenericToken<LexerPtr> &Result, bool TokAtPhysicalStartOfLine);
 
-  bool CheckUnicodeWhitespace(Token &Result, uint32_t C, const char *CurPtr);
+  bool CheckUnicodeWhitespace(GenericToken<LexerPtr> &Result, uint32_t C, LexerPtr CurPtr);
 
-  bool LexUnicodeIdentifierStart(Token &Result, uint32_t C, const char *CurPtr);
+  bool LexUnicodeIdentifierStart(GenericToken<LexerPtr> &Result, uint32_t C, LexerPtr CurPtr);
 
   /// FormTokenWithChars - When we lex a token, we have identified a span
   /// starting at BufferPtr, going to TokEnd that forms the token.  This method
   /// takes that range and assigns it to the token as its location and size.  In
   /// addition, since tokens cannot overlap, this also updates BufferPtr to be
   /// TokEnd.
-  void FormTokenWithChars(Token &Result, const char *TokEnd,
+  void FormTokenWithChars(GenericToken<LexerPtr> &Result, LexerPtr TokEnd,
                           tok::TokenKind Kind) {
     unsigned TokLen = TokEnd-BufferPtr;
     Result.setLength(TokLen);
@@ -660,7 +661,7 @@ private:
   /// advance over it, and return it.  This is tricky in several cases.  Here we
   /// just handle the trivial case and fall-back to the non-inlined
   /// getCharAndSizeSlow method to handle the hard case.
-  inline char getAndAdvanceChar(const char *&Ptr, Token &Tok) {
+  inline char getAndAdvanceChar(LexerPtr &Ptr, GenericToken<LexerPtr> &Tok) {
     // If this is not a trigraph and not a UCN or escaped newline, return
     // quickly.
     if (isObviouslySimpleCharacter(Ptr[0])) return *Ptr++;
@@ -675,7 +676,7 @@ private:
   /// and added to a given token, check to see if there are diagnostics that
   /// need to be emitted or flags that need to be set on the token.  If so, do
   /// it.
-  const char *ConsumeChar(const char *Ptr, unsigned Size, Token &Tok) {
+  LexerPtr ConsumeChar(LexerPtr Ptr, unsigned Size, GenericLexer<LexerPtr> &Tok) {
     // Normal case, we consumed exactly one token.  Just return it.
     if (Size == 1)
       return Ptr+Size;
@@ -691,7 +692,7 @@ private:
   /// get its size, and return it.  This is tricky in several cases.  Here we
   /// just handle the trivial case and fall-back to the non-inlined
   /// getCharAndSizeSlow method to handle the hard case.
-  inline char getCharAndSize(const char *Ptr, unsigned &Size) {
+  inline char getCharAndSize(LexerPtr Ptr, unsigned &Size) {
     // If this is not a trigraph and not a UCN or escaped newline, return
     // quickly.
     if (isObviouslySimpleCharacter(Ptr[0])) {
@@ -705,8 +706,8 @@ private:
 
   /// getCharAndSizeSlow - Handle the slow/uncommon case of the getCharAndSize
   /// method.
-  char getCharAndSizeSlow(const char *Ptr, unsigned &Size,
-                          Token *Tok = nullptr);
+  char getCharAndSizeSlow(LexerPtr Ptr, unsigned &Size,
+                          GenericToken<LexerPtr> *Tok = nullptr);
 
   /// getEscapedNewLineSize - Return the size of the specified escaped newline,
   /// or 0 if it is not an escaped newline. P[-1] is known to be a "\" on entry
@@ -728,51 +729,51 @@ private:
 
   void SetByteOffset(unsigned Offset, bool StartOfLine);
 
-  void PropagateLineStartLeadingSpaceInfo(Token &Result);
+  void PropagateLineStartLeadingSpaceInfo(GenericToken<LexerPtr> &Result);
 
-  const char *LexUDSuffix(Token &Result, const char *CurPtr,
+  LexerPtr LexUDSuffix(GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                           bool IsStringLiteral);
 
   // Helper functions to lex the remainder of a token of the specific type.
 
   // This function handles both ASCII and Unicode identifiers after
   // the first codepoint of the identifyier has been parsed.
-  bool LexIdentifierContinue(Token &Result, const char *CurPtr);
+  bool LexIdentifierContinue(GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
 
-  bool LexNumericConstant    (Token &Result, const char *CurPtr);
-  bool LexStringLiteral      (Token &Result, const char *CurPtr,
+  bool LexNumericConstant    (GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
+  bool LexStringLiteral      (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               tok::TokenKind Kind);
-  bool LexRawStringLiteral   (Token &Result, const char *CurPtr,
+  bool LexRawStringLiteral   (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               tok::TokenKind Kind);
-  bool LexAngledStringLiteral(Token &Result, const char *CurPtr);
-  bool LexCharConstant       (Token &Result, const char *CurPtr,
+  bool LexAngledStringLiteral(GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
+  bool LexCharConstant       (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               tok::TokenKind Kind);
-  bool LexEndOfFile          (Token &Result, const char *CurPtr);
-  bool SkipWhitespace        (Token &Result, const char *CurPtr,
+  bool LexEndOfFile          (GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
+  bool SkipWhitespace        (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               bool &TokAtPhysicalStartOfLine);
-  bool SkipLineComment       (Token &Result, const char *CurPtr,
+  bool SkipLineComment       (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               bool &TokAtPhysicalStartOfLine);
-  bool SkipBlockComment      (Token &Result, const char *CurPtr,
+  bool SkipBlockComment      (GenericToken<LexerPtr> &Result, LexerPtr CurPtr,
                               bool &TokAtPhysicalStartOfLine);
-  bool SaveLineComment       (Token &Result, const char *CurPtr);
+  bool SaveLineComment       (GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
 
-  bool IsStartOfConflictMarker(const char *CurPtr);
-  bool HandleEndOfConflictMarker(const char *CurPtr);
+  bool IsStartOfConflictMarker(LexerPtr CurPtr);
+  bool HandleEndOfConflictMarker(LexerPtr CurPtr);
 
-  bool lexEditorPlaceholder(Token &Result, const char *CurPtr);
+  bool lexEditorPlaceholder(GenericToken<LexerPtr> &Result, LexerPtr CurPtr);
 
-  bool isCodeCompletionPoint(const char *CurPtr) const;
+  bool isCodeCompletionPoint(LexerPtr CurPtr) const;
   void cutOffLexing() { BufferPtr = BufferEnd; }
 
-  bool isHexaLiteral(const char *Start, const LangOptions &LangOpts);
+  bool isHexaLiteral(LexerPtr Start, const LangOptions &LangOpts);
 
-  void codeCompleteIncludedFile(const char *PathStart,
-                                const char *CompletionPoint, bool IsAngled);
+  void codeCompleteIncludedFile(LexerPtr PathStart,
+                                LexerPtr CompletionPoint, bool IsAngled);
 
   llvm::Optional<uint32_t>
-  tryReadNumericUCN(const char *&StartPtr, const char *SlashLoc, Token *Result);
-  llvm::Optional<uint32_t> tryReadNamedUCN(const char *&StartPtr,
-                                           Token *Result);
+  tryReadNumericUCN(LexerPtr &StartPtr, LexerPtr SlashLoc, GenericToken<LexerPtr> *Result);
+  llvm::Optional<uint32_t> tryReadNamedUCN(LexerPtr &StartPtr,
+                                           GenericToken<LexerPtr> *Result);
 
   /// Read a universal character name.
   ///
@@ -786,7 +787,7 @@ private:
   ///
   /// \return The Unicode codepoint specified by the UCN, or 0 if the UCN is
   ///         invalid.
-  uint32_t tryReadUCN(const char *&StartPtr, const char *SlashLoc, Token *Result);
+  uint32_t tryReadUCN(LexerPtr &StartPtr, LexerPtr SlashLoc, GenericToken<LexerPtr> *Result);
 
   /// Try to consume a UCN as part of an identifier at the current
   /// location.
@@ -799,16 +800,19 @@ private:
   ///               success.
   /// \return \c true if a UCN was lexed and it produced an acceptable
   ///         identifier character, \c false otherwise.
-  bool tryConsumeIdentifierUCN(const char *&CurPtr, unsigned Size,
-                               Token &Result);
+  bool tryConsumeIdentifierUCN(LexerPtr &CurPtr, unsigned Size,
+                               GenericToken<LexerPtr> &Result);
 
   /// Try to consume an identifier character encoded in UTF-8.
   /// \param CurPtr Points to the start of the (potential) UTF-8 code unit
   ///        sequence. On success, updated to point past the end of it.
   /// \return \c true if a UTF-8 sequence mapping to an acceptable identifier
   ///         character was lexed, \c false otherwise.
-  bool tryConsumeIdentifierUTF8Char(const char *&CurPtr);
+  bool tryConsumeIdentifierUTF8Char(LexerPtr &CurPtr);
 };
+
+using Lexer = GenericLexer<const char*>;
+
 
 } // namespace clang
 

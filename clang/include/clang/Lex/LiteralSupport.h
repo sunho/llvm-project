@@ -27,7 +27,9 @@ namespace clang {
 
 class DiagnosticsEngine;
 class Preprocessor;
-class Token;
+template<typename LexerPtr>
+class GenericToken;
+using Token = GenericToken<const char*>;
 class SourceLocation;
 class TargetInfo;
 class SourceManager;

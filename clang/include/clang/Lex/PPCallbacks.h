@@ -22,7 +22,10 @@
 #include "llvm/ADT/StringRef.h"
 
 namespace clang {
-  class Token;
+  template<typename LexerPtr>
+  class GenericToken;
+  using Token = GenericToken<const char*>;
+
   class IdentifierInfo;
   class MacroDefinition;
   class MacroDirective;
