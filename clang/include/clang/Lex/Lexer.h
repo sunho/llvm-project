@@ -21,16 +21,12 @@
 #include "clang/Lex/Token.h"
 #include "llvm/ADT/Optional.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "llvm/ADT/StringRef.h"
 #include <cassert>
 #include <cstdint>
+#include <list>
 #include <string>
-
-namespace llvm {
-
-class MemoryBufferRef;
-
-} // namespace llvm
 
 namespace clang {
 
@@ -91,6 +87,12 @@ class Lexer : public PreprocessorLexer {
 
   // Location for start of file.
   SourceLocation FileLoc;
+
+  std::unique_ptr<llvm::MemoryBuffer> Mine;
+
+  std::list<std::string> TokStrings;
+
+  llvm::MemoryBufferRef Origin;
 
   // LangOpts enabled by this language.
   // Storing LangOptions as reference here is important from performance point
@@ -229,6 +231,26 @@ private:
   ///  the PreprocessorLexer interface.
   void IndirectLex(Token &Result) override { Lex(Result); }
 
+  bool TryExpandBuffer();
+
+  struct BufferPtrToUpdateRAII {
+    BufferPtrToUpdateRAII(Lexer& TheLexer, const char** Ptr) : TheLexer(TheLexer), Ptr(Ptr) {
+      TheLexer.RegisterBufferPtrToUpdate(Ptr);
+    }
+    ~BufferPtrToUpdateRAII() {
+      TheLexer.UnregisterBufferPtrToUpdate(Ptr);
+    }
+
+    Lexer& TheLexer;
+    const char** Ptr;
+  };
+  void RegisterBufferPtrToUpdate(const char** Ptr) {
+    BufferPtrsToUpdate.push_back(Ptr);
+  }
+  void UnregisterBufferPtrToUpdate(const char** Ptr) {
+    BufferPtrsToUpdate.erase(llvm::find(BufferPtrsToUpdate, Ptr));
+  }
+  llvm::SmallVector<const char**, 5> BufferPtrsToUpdate;
 public:
   /// LexFromRawLexer - Lex a token from a designated raw lexer (one with no
   /// associated preprocessor object.  Return true if the 'next character to
@@ -683,7 +705,9 @@ private:
     // Otherwise, re-lex the character with a current token, allowing
     // diagnostics to be emitted and flags to be set.
     Size = 0;
+    RegisterBufferPtrToUpdate(&Ptr);
     getCharAndSizeSlow(Ptr, Size, &Tok);
+    UnregisterBufferPtrToUpdate(&Ptr);
     return Ptr+Size;
   }
 
