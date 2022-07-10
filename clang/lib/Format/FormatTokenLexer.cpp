@@ -568,7 +568,7 @@ void FormatTokenLexer::tryParseJSRegexLiteral() {
   RegexToken->TokenText = StringRef(RegexBegin, Offset - RegexBegin);
   RegexToken->ColumnWidth = RegexToken->TokenText.size();
 
-  resetLexer(SourceMgr.getFileOffset(Lex->getSourceLocation(Offset)));
+  resetLexer(SourceMgr.getFileOffset(Lex->getSourceLocation(Offset-Lex->getBuffer().data())));
 }
 
 void FormatTokenLexer::handleCSharpVerbatimAndInterpolatedStrings() {
@@ -629,7 +629,7 @@ void FormatTokenLexer::handleCSharpVerbatimAndInterpolatedStrings() {
   }
 
   SourceLocation loc = Offset < Lex->getBuffer().end()
-                           ? Lex->getSourceLocation(Offset + 1)
+                           ? Lex->getSourceLocation(Offset - Lex->getBuffer().data() + 1)
                            : SourceMgr.getLocForEndOfFile(ID);
   resetLexer(SourceMgr.getFileOffset(loc));
 }
@@ -696,7 +696,7 @@ void FormatTokenLexer::handleTemplateStrings() {
   }
 
   SourceLocation loc = Offset < Lex->getBuffer().end()
-                           ? Lex->getSourceLocation(Offset + 1)
+                           ? Lex->getSourceLocation(Offset - Lex->getBuffer().data() + 1)
                            : SourceMgr.getLocForEndOfFile(ID);
   resetLexer(SourceMgr.getFileOffset(loc));
 }
@@ -717,7 +717,7 @@ void FormatTokenLexer::tryParsePythonComment() {
   HashToken->Tok.setKind(tok::comment);
   HashToken->TokenText = Lex->getBuffer().substr(From, Len);
   SourceLocation Loc = To < Lex->getBuffer().size()
-                           ? Lex->getSourceLocation(CommentBegin + Len)
+                           ? Lex->getSourceLocation(CommentBegin - Lex->getBuffer().data() + Len)
                            : SourceMgr.getLocForEndOfFile(ID);
   resetLexer(SourceMgr.getFileOffset(Loc));
 }
@@ -849,7 +849,7 @@ FormatToken *FormatTokenLexer::getStashedToken() {
 void FormatTokenLexer::truncateToken(size_t NewLen) {
   assert(NewLen <= FormatTok->TokenText.size());
   resetLexer(SourceMgr.getFileOffset(Lex->getSourceLocation(
-      Lex->getBufferLocation() - FormatTok->TokenText.size() + NewLen)));
+      Lex->getCurrentBufferOffset() - FormatTok->TokenText.size() + NewLen)));
   FormatTok->TokenText = FormatTok->TokenText.substr(0, NewLen);
   FormatTok->ColumnWidth = encoding::columnWidthWithTabs(
       FormatTok->TokenText, FormatTok->OriginalColumn, Style.TabWidth,
@@ -1135,7 +1135,7 @@ bool FormatTokenLexer::readRawTokenVerilogSpecific(Token &Tok) {
   // function checks that the kind is not an annotation.
   Tok.setKind(tok::raw_identifier);
   Tok.setLength(Len);
-  Tok.setLocation(Lex->getSourceLocation(Start, Len));
+  Tok.setLocation(Lex->getSourceLocation(Lex->getCurrentBufferOffset(), Len));
   Tok.setRawIdentifierData(Start);
   Lex->seek(Lex->getCurrentBufferOffset() + Len, /*IsAtStartofline=*/false);
   return true;
