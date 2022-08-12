@@ -54,14 +54,11 @@ struct Session {
   };
 
   using DynLibJDMap = std::map<std::string, orc::JITDylib *>;
-  using KnownDynLibPathMap = std::map<std::string, std::string>;
   using SymbolInfoMap = StringMap<MemoryRegionInfo>;
   using FileInfoMap = StringMap<FileInfo>;
 
-  Expected<orc::JITDylib *> getOrLoadDynamicLibrary(StringRef LibName,
-                                                    StringRef LibPath);
-  Error loadAndLinkDynamicLibrary(orc::JITDylib &JD, StringRef LibName,
-                                  StringRef LibPath);
+  Expected<orc::JITDylib *> getOrLoadDynamicLibrary(StringRef LibPath);
+  Error loadAndLinkDynamicLibrary(orc::JITDylib &JD, StringRef LibPath);
 
   Expected<FileInfo &> findFileInfo(StringRef FileName);
   Expected<MemoryRegionInfo &> findSectionInfo(StringRef FileName,
@@ -76,7 +73,6 @@ struct Session {
                                               Twine ErrorMsgStem);
 
   DynLibJDMap DynLibJDs;
-  KnownDynLibPathMap KnownDynLibPaths;
 
   SymbolInfoMap SymbolInfos;
   FileInfoMap FileInfos;

@@ -812,7 +812,7 @@ static Error loadDylibs(Session &S) {
   LLVM_DEBUG(dbgs() << "Loading dylibs...\n");
   for (const auto &Dylib : Dylibs) {
     LLVM_DEBUG(dbgs() << "  " << Dylib << "\n");
-    if (auto Err = S.loadAndLinkDynamicLibrary(*S.MainJD, Dylib, Dylib))
+    if (auto Err = S.loadAndLinkDynamicLibrary(*S.MainJD, Dylib))
       return Err;
   }
 
@@ -1105,8 +1105,7 @@ Session::Session(std::unique_ptr<ExecutorProcessControl> EPC, Error &Err)
       if (!DLLName.endswith_insensitive(".dll"))
         return make_error<StringError>("DLLName not ending with .dll",
                                        inconvertibleErrorCode());
-      return loadAndLinkDynamicLibrary(JD, DLLName.drop_back(strlen(".dll")),
-                                       DLLName);
+      return loadAndLinkDynamicLibrary(JD, DLLName);
     };
 
     if (auto P = COFFPlatform::Create(ES, ObjLayer, *MainJD, OrcRuntime.c_str(),
@@ -1222,40 +1221,32 @@ void Session::modifyPassConfig(const Triple &TT,
     PassConfig.PostPrunePasses.push_back(addSelfRelocations);
 }
 
-Expected<JITDylib *> Session::getOrLoadDynamicLibrary(StringRef LibName,
-                                                      StringRef LibPath) {
-  auto It = DynLibJDs.find(LibName.str());
+Expected<JITDylib *> Session::getOrLoadDynamicLibrary(StringRef LibPath) {
+  auto It = DynLibJDs.find(LibPath.str());
   if (It != DynLibJDs.end()) {
-    LLVM_DEBUG({
-      if (LibPath != KnownDynLibPaths[LibName.str()])
-        dbgs() << "Warning: dynamic library from " << LibPath
-               << " is ignored.\n";
-    });
     return It->second;
   }
   auto G = EPCDynamicLibrarySearchGenerator::Load(ES, LibPath.data());
   if (!G)
     return G.takeError();
-  auto JD = &ES.createBareJITDylib(LibName.str());
+  auto JD = &ES.createBareJITDylib(LibPath.str());
 
   JD->addGenerator(std::move(*G));
-  DynLibJDs.emplace(LibName.str(), JD);
-  KnownDynLibPaths.emplace(LibName.str(), LibPath.str());
+  DynLibJDs.emplace(LibPath.str(), JD);
   LLVM_DEBUG({
-    dbgs() << "Loaded dynamic library " << LibPath.data() << " for " << LibName
+    dbgs() << "Loaded dynamic library " << LibPath.data() << " for " << LibPath
            << "\n";
   });
   return JD;
 }
 
-Error Session::loadAndLinkDynamicLibrary(JITDylib &JD, StringRef LibName,
-                                         StringRef LibPath) {
-  auto DL = getOrLoadDynamicLibrary(LibName, LibPath);
+Error Session::loadAndLinkDynamicLibrary(JITDylib &JD, StringRef LibPath) {
+  auto DL = getOrLoadDynamicLibrary(LibPath);
   if (!DL)
     return DL.takeError();
   JD.addToLinkOrder(**DL);
   LLVM_DEBUG({
-    dbgs() << "Linking dynamic library " << LibName << " to " << JD.getName()
+    dbgs() << "Linking dynamic library " << LibPath << " to " << JD.getName()
            << "\n";
   });
   return Error::success();
@@ -1832,8 +1823,7 @@ static Error addLibraries(Session &S,
         case file_magic::pecoff_executable:
         case file_magic::elf_shared_object:
         case file_magic::macho_dynamically_linked_shared_lib: {
-          if (auto Err =
-                  S.loadAndLinkDynamicLibrary(JD, LL.LibName, LibPath.data()))
+          if (auto Err = S.loadAndLinkDynamicLibrary(JD, LibPath.data()))
             return Err;
           break;
         }
