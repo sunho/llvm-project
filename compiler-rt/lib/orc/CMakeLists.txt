@@ -131,6 +131,10 @@ else() # not Apple
       coff_platform.cpp
       coff_platform.per_jd.cpp
       )
+
+    if (MSVC)
+      set(ORC_CFLAGS "${ORC_CFLAGS} /MD")
+    endif()
   else()
     set(ORC_BUILD_TYPE STATIC)
 

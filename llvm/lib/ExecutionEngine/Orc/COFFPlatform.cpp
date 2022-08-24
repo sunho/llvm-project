@@ -221,6 +221,16 @@ Expected<MemoryBufferRef> COFFPlatform::getPerJDObjectFile() {
   return (*Buffer)->getMemoryBufferRef();
 }
 
+static void addAliases(ExecutionSession &ES, SymbolAliasMap &Aliases,
+                       ArrayRef<std::pair<const char *, const char *>> AL) {
+  for (auto &KV : AL) {
+    auto AliasName = ES.intern(KV.first);
+    assert(!Aliases.count(AliasName) && "Duplicate symbol name in alias map");
+    Aliases[std::move(AliasName)] = {ES.intern(KV.second),
+                                     JITSymbolFlags::Exported};
+  }
+}
+
 Error COFFPlatform::setupJITDylib(JITDylib &JD) {
   if (auto Err = JD.define(std::make_unique<COFFHeaderMaterializationUnit>(
           *this, COFFHeaderStartSymbol)))
@@ -228,6 +238,12 @@ Error COFFPlatform::setupJITDylib(JITDylib &JD) {
 
   if (auto Err = ES.lookup({&JD}, COFFHeaderStartSymbol).takeError())
     return Err;
+
+  // Define the CXX aliases.
+  SymbolAliasMap CXXAliases;
+  addAliases(ES, CXXAliases, requiredCXXAliases());
+  if (auto Err = JD.define(symbolAliases(std::move(CXXAliases))))
+    return std::move(Err);
 
   auto PerJDObj = getPerJDObjectFile();
   if (!PerJDObj)
@@ -292,19 +308,8 @@ Error COFFPlatform::notifyRemoving(ResourceTracker &RT) {
   llvm_unreachable("Not supported yet");
 }
 
-static void addAliases(ExecutionSession &ES, SymbolAliasMap &Aliases,
-                       ArrayRef<std::pair<const char *, const char *>> AL) {
-  for (auto &KV : AL) {
-    auto AliasName = ES.intern(KV.first);
-    assert(!Aliases.count(AliasName) && "Duplicate symbol name in alias map");
-    Aliases[std::move(AliasName)] = {ES.intern(KV.second),
-                                     JITSymbolFlags::Exported};
-  }
-}
-
 SymbolAliasMap COFFPlatform::standardPlatformAliases(ExecutionSession &ES) {
   SymbolAliasMap Aliases;
-  addAliases(ES, Aliases, requiredCXXAliases());
   addAliases(ES, Aliases, standardRuntimeUtilityAliases());
   return Aliases;
 }
