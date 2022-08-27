@@ -49,13 +49,17 @@ class Interpreter {
   std::unique_ptr<llvm::orc::ThreadSafeContext> TSCtx;
   std::unique_ptr<IncrementalParser> IncrParser;
   std::unique_ptr<IncrementalExecutor> IncrExecutor;
+  std::string OrcRuntimePath;
 
-  Interpreter(std::unique_ptr<CompilerInstance> CI, llvm::Error &Err);
+  Interpreter(std::unique_ptr<CompilerInstance> CI, 
+      const std::string& OrcRuntimePath, llvm::Error &Err);
 
 public:
   ~Interpreter();
   static llvm::Expected<std::unique_ptr<Interpreter>>
-  create(std::unique_ptr<CompilerInstance> CI);
+  create(std::unique_ptr<CompilerInstance> CI, const std::string& OrcRuntimePath = "");
+  static std::string findOrcRuntimePath(
+      std::vector<const char*>& ClangArgv);
   const CompilerInstance *getCompilerInstance() const;
   const llvm::orc::LLJIT *getExecutionEngine() const;
   llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Code);

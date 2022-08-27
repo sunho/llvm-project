@@ -124,6 +124,34 @@ CreateCI(const llvm::opt::ArgStringList &Argv) {
 
 } // anonymous namespace
 
+std::string Interpreter::findOrcRuntimePath(std::vector<const char*>& ClangArgv) {
+    IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
+    IntrusiveRefCntPtr<DiagnosticOptions> DiagOpts =
+        CreateAndPopulateDiagOpts(ClangArgv);
+    TextDiagnosticBuffer* DiagsBuffer = new TextDiagnosticBuffer;
+    DiagnosticsEngine Diags(DiagID, &*DiagOpts, DiagsBuffer);
+
+    driver::Driver Driver(/*MainBinaryName=*/ClangArgv[0],
+        llvm::sys::getProcessTriple(), Diags);
+    Driver.setCheckInputsExist(false);
+    llvm::ArrayRef<const char*> RF = llvm::makeArrayRef(ClangArgv);
+    std::unique_ptr<driver::Compilation> Compilation(Driver.BuildCompilation(RF));
+
+    auto RuntimePaths = Compilation->getDefaultToolChain().getRuntimePaths();
+    if (!RuntimePaths.empty()) {
+        SmallString<256> Path(RuntimePaths.front());
+        llvm::sys::path::append(Path, "libclang_rt.orc.a");
+        if (Driver.getVFS().exists(Path))
+            return Path.str().str();
+    }
+
+    auto Path = Compilation->getDefaultToolChain().getCompilerRT(Compilation->getArgs(), "orc");
+    if (Driver.getVFS().exists(Path))
+        return Path;
+
+    return "";
+}
+
 llvm::Expected<std::unique_ptr<CompilerInstance>>
 IncrementalCompilerBuilder::create(std::vector<const char *> &ClangArgv) {
 
@@ -163,7 +191,7 @@ IncrementalCompilerBuilder::create(std::vector<const char *> &ClangArgv) {
   Driver.setCheckInputsExist(false); // the input comes from mem buffers
   llvm::ArrayRef<const char *> RF = llvm::makeArrayRef(ClangArgv);
   std::unique_ptr<driver::Compilation> Compilation(Driver.BuildCompilation(RF));
-
+ 
   if (Compilation->getArgs().hasArg(driver::options::OPT_v))
     Compilation->getJobs().Print(llvm::errs(), "\n", /*Quote=*/false);
 
@@ -175,7 +203,9 @@ IncrementalCompilerBuilder::create(std::vector<const char *> &ClangArgv) {
 }
 
 Interpreter::Interpreter(std::unique_ptr<CompilerInstance> CI,
-                         llvm::Error &Err) {
+    const std::string& OrcRuntimePath,
+                         llvm::Error &Err)
+ : OrcRuntimePath(OrcRuntimePath)  {
   llvm::ErrorAsOutParameter EAO(&Err);
   auto LLVMCtx = std::make_unique<llvm::LLVMContext>();
   TSCtx = std::make_unique<llvm::orc::ThreadSafeContext>(std::move(LLVMCtx));
@@ -193,10 +223,12 @@ Interpreter::~Interpreter() {
 }
 
 llvm::Expected<std::unique_ptr<Interpreter>>
-Interpreter::create(std::unique_ptr<CompilerInstance> CI) {
-  llvm::Error Err = llvm::Error::success();
+Interpreter::create(std::unique_ptr<CompilerInstance> CI, 
+    const std::string& OrcRuntimePath) {
+  llvm::Error Err = ll  vm::Error::success();
   auto Interp =
-      std::unique_ptr<Interpreter>(new Interpreter(std::move(CI), Err));
+      std::unique_ptr<Interpreter>(new Interpreter(std::move(CI),
+          OrcRuntimePath, Err));
   if (Err)
     return std::move(Err);
   return std::move(Interp);
@@ -223,7 +255,7 @@ llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
     const clang::TargetInfo &TI =
         getCompilerInstance()->getASTContext().getTargetInfo();
     llvm::Error Err = llvm::Error::success();
-    IncrExecutor = std::make_unique<IncrementalExecutor>(*TSCtx, Err, TI);
+    IncrExecutor = std::make_unique<IncrementalExecutor>(*TSCtx, Err, OrcRuntimePath, TI);
 
     if (Err)
       return Err;

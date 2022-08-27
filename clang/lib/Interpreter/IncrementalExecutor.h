@@ -44,7 +44,7 @@ public:
   enum SymbolNameKind { IRName, LinkerName };
 
   IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC, llvm::Error &Err,
-                      const clang::TargetInfo &TI);
+                      const std::string& OrcRuntimePath, const clang::TargetInfo &TI);
   ~IncrementalExecutor();
 
   llvm::Error addModule(PartialTranslationUnit &PTU);

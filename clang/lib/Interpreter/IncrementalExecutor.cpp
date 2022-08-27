@@ -30,10 +30,13 @@ namespace clang {
 
 IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
                                          llvm::Error &Err,
+                                         const std::string& OrcRuntimePath,
                                          const clang::TargetInfo &TI)
     : TSCtx(TSC) {
   using namespace llvm::orc;
   llvm::ErrorAsOutParameter EAO(&Err);
+
+  bool UseJITLink = TI.getTriple().isWindowsMSVCEnvironment() && TI.getTriple().isX86();
 
   auto JTMB = JITTargetMachineBuilder(TI.getTriple());
   JTMB.addFeatures(TI.getTargetOpts().Features);
@@ -51,6 +54,10 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
   else {
     Err = PSGOrErr.takeError();
     return;
+  }
+
+  if (!OrcRuntimePath.empty() && UseJITLink) {
+      Jit->getTargetTriple().isOSBinFormatCOFF();
   }
 }
 

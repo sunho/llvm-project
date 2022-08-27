@@ -5,6 +5,7 @@
 
 cmake_minimum_required(VERSION 3.13.4)
 
+set(CMAKE_CXX_STANDARD 17)
 # Check if compiler-rt is built as a standalone project.
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR OR COMPILER_RT_STANDALONE_BUILD)
   project(CompilerRT C CXX ASM)
