@@ -86,8 +86,8 @@ class Lexer : public PreprocessorLexer {
   // Start of the buffer.
   const char *BufferStart;
 
-  // End of the buffer.
-  const char *BufferEnd;
+  // Size of the buffer.
+  unsigned BufferSize;
 
   // Location for start of file.
   SourceLocation FileLoc;
@@ -126,9 +126,9 @@ class Lexer : public PreprocessorLexer {
   // NOTE: any state that mutates when in raw mode must have save/restore code
   // in Lexer::isNextPPTokenLParen.
 
-  // BufferPtr - Current pointer into the buffer.  This is the next character
+  // BufferOffset - Current offset into the buffer.  This is the next character
   // to be lexed.
-  const char *BufferPtr;
+  unsigned BufferOffset;
 
   // IsAtStartOfLine - True if the next lexed token should get the "start of
   // line" flag set on it.
@@ -143,9 +143,9 @@ class Lexer : public PreprocessorLexer {
   /// True if this is the first time we're lexing the input file.
   bool IsFirstTimeLexingFile;
 
-  // NewLinePtr - A pointer to new line character '\n' being lexed. For '\r\n',
+  // NewLineOffset - A offset to new line character '\n' being lexed. For '\r\n',
   // it also points to '\n.'
-  const char *NewLinePtr;
+  Optional<unsigned> NewLineOffset;
 
   // CurrentConflictMarkerState - The kind of conflict marker we are handling.
   ConflictMarkerKind CurrentConflictMarkerState;
@@ -157,7 +157,7 @@ class Lexer : public PreprocessorLexer {
   /// next token to use from the current dependency directive.
   unsigned NextDepDirectiveTokenIndex = 0;
 
-  void InitLexer(const char *BufStart, const char *BufPtr, const char *BufEnd);
+  void InitLexer(const char *BufStart, unsigned BufferOffset, unsigned BufferSize);
 
 public:
   /// Lexer constructor - Create a new lexer object for the specified buffer
@@ -238,7 +238,7 @@ public:
     Lex(Result);
     // Note that lexing to the end of the buffer doesn't implicitly delete the
     // lexer when in raw mode.
-    return BufferPtr == BufferEnd;
+    return BufferOffset == BufferSize;
   }
 
   /// isKeepWhitespaceMode - Return true if the lexer should return tokens for
@@ -282,7 +282,7 @@ public:
 
   /// Gets source code buffer.
   StringRef getBuffer() const {
-    return StringRef(BufferStart, BufferEnd - BufferStart);
+    return StringRef(BufferStart, BufferSize);
   }
 
   /// ReadToEndOfLine - Read the rest of the current preprocessor line as an
@@ -292,25 +292,27 @@ public:
 
   /// Diag - Forwarding function for diagnostics.  This translate a source
   /// position in the current buffer into a SourceLocation object for rendering.
-  DiagnosticBuilder Diag(const char *Loc, unsigned DiagID) const;
+  DiagnosticBuilder Diag(unsigned Loc, unsigned DiagID) const;
 
   /// getSourceLocation - Return a source location identifier for the specified
   /// offset in the current file.
-  SourceLocation getSourceLocation(const char *Loc, unsigned TokLen = 1) const;
+  SourceLocation getSourceLocation(unsigned Loc, unsigned TokLen = 1) const;
 
   /// getSourceLocation - Return a source location for the next character in
   /// the current file.
   SourceLocation getSourceLocation() override {
-    return getSourceLocation(BufferPtr);
+    return getSourceLocation(BufferOffset);
   }
 
   /// Return the current location in the buffer.
-  const char *getBufferLocation() const { return BufferPtr; }
+  const char *getBufferLocation() const { 
+    assert(BufferOffset <= BufferSize && "Invalid buffer state");
+    return BufferStart + BufferOffset;
+  }
 
   /// Returns the current lexing offset.
   unsigned getCurrentBufferOffset() {
-    assert(BufferPtr >= BufferStart && "Invalid buffer state");
-    return BufferPtr - BufferStart;
+    return BufferOffset;
   }
 
   /// Set the lexer's buffer pointer to \p Offset.
@@ -607,22 +609,22 @@ private:
   ///
   bool LexTokenInternal(Token &Result, bool TokAtPhysicalStartOfLine);
 
-  bool CheckUnicodeWhitespace(Token &Result, uint32_t C, const char *CurPtr);
+  bool CheckUnicodeWhitespace(Token &Result, uint32_t C, unsigned CurOffset);
 
-  bool LexUnicodeIdentifierStart(Token &Result, uint32_t C, const char *CurPtr);
+  bool LexUnicodeIdentifierStart(Token &Result, uint32_t C, unsigned CurOffset);
 
   /// FormTokenWithChars - When we lex a token, we have identified a span
   /// starting at BufferPtr, going to TokEnd that forms the token.  This method
   /// takes that range and assigns it to the token as its location and size.  In
   /// addition, since tokens cannot overlap, this also updates BufferPtr to be
   /// TokEnd.
-  void FormTokenWithChars(Token &Result, const char *TokEnd,
+  void FormTokenWithChars(Token &Result, unsigned TokEnd,
                           tok::TokenKind Kind) {
-    unsigned TokLen = TokEnd-BufferPtr;
+    unsigned TokLen = TokEnd-BufferOffset;
     Result.setLength(TokLen);
-    Result.setLocation(getSourceLocation(BufferPtr, TokLen));
+    Result.setLocation(getSourceLocation(BufferOffset, TokLen));
     Result.setKind(Kind);
-    BufferPtr = TokEnd;
+    BufferOffset = TokEnd;
   }
 
   /// isNextPPTokenLParen - Return 1 if the next unexpanded token will return a
@@ -660,14 +662,14 @@ private:
   /// advance over it, and return it.  This is tricky in several cases.  Here we
   /// just handle the trivial case and fall-back to the non-inlined
   /// getCharAndSizeSlow method to handle the hard case.
-  inline char getAndAdvanceChar(const char *&Ptr, Token &Tok) {
+  inline char getAndAdvanceChar(unsigned &Offset, Token &Tok) {
     // If this is not a trigraph and not a UCN or escaped newline, return
     // quickly.
-    if (isObviouslySimpleCharacter(Ptr[0])) return *Ptr++;
+    if (isObviouslySimpleCharacter(BufferStart[Offset])) return BufferStart[Offset++];
 
     unsigned Size = 0;
-    char C = getCharAndSizeSlow(Ptr, Size, &Tok);
-    Ptr += Size;
+    char C = getCharAndSizeSlow(Offset, Size, &Tok);
+    Offset += Size;
     return C;
   }
 
@@ -675,37 +677,37 @@ private:
   /// and added to a given token, check to see if there are diagnostics that
   /// need to be emitted or flags that need to be set on the token.  If so, do
   /// it.
-  const char *ConsumeChar(const char *Ptr, unsigned Size, Token &Tok) {
+  unsigned ConsumeChar(unsigned Offset, unsigned Size, Token &Tok) {
     // Normal case, we consumed exactly one token.  Just return it.
     if (Size == 1)
-      return Ptr+Size;
+      return Offset+Size;
 
     // Otherwise, re-lex the character with a current token, allowing
     // diagnostics to be emitted and flags to be set.
     Size = 0;
-    getCharAndSizeSlow(Ptr, Size, &Tok);
-    return Ptr+Size;
+    getCharAndSizeSlow(Offset, Size, &Tok);
+    return Offset+Size;
   }
 
   /// getCharAndSize - Peek a single 'character' from the specified buffer,
   /// get its size, and return it.  This is tricky in several cases.  Here we
   /// just handle the trivial case and fall-back to the non-inlined
   /// getCharAndSizeSlow method to handle the hard case.
-  inline char getCharAndSize(const char *Ptr, unsigned &Size) {
+  inline char getCharAndSize(unsigned Offset, unsigned &Size) {
     // If this is not a trigraph and not a UCN or escaped newline, return
     // quickly.
-    if (isObviouslySimpleCharacter(Ptr[0])) {
+    if (isObviouslySimpleCharacter(BufferStart[Offset])) {
       Size = 1;
-      return *Ptr;
+      return BufferStart[Offset];
     }
 
     Size = 0;
-    return getCharAndSizeSlow(Ptr, Size);
+    return getCharAndSizeSlow(Offset, Size);
   }
 
   /// getCharAndSizeSlow - Handle the slow/uncommon case of the getCharAndSize
   /// method.
-  char getCharAndSizeSlow(const char *Ptr, unsigned &Size,
+  char getCharAndSizeSlow(unsigned Offset, unsigned &Size,
                           Token *Tok = nullptr);
 
   /// getEscapedNewLineSize - Return the size of the specified escaped newline,
@@ -730,49 +732,49 @@ private:
 
   void PropagateLineStartLeadingSpaceInfo(Token &Result);
 
-  const char *LexUDSuffix(Token &Result, const char *CurPtr,
+  unsigned LexUDSuffix(Token &Result, unsigned CurOffset,
                           bool IsStringLiteral);
 
   // Helper functions to lex the remainder of a token of the specific type.
 
   // This function handles both ASCII and Unicode identifiers after
   // the first codepoint of the identifyier has been parsed.
-  bool LexIdentifierContinue(Token &Result, const char *CurPtr);
+  bool LexIdentifierContinue(Token &Result, unsigned CurOffset);
 
-  bool LexNumericConstant    (Token &Result, const char *CurPtr);
-  bool LexStringLiteral      (Token &Result, const char *CurPtr,
+  bool LexNumericConstant    (Token &Result, unsigned CurOffset);
+  bool LexStringLiteral      (Token &Result, unsigned CurOffset,
                               tok::TokenKind Kind);
-  bool LexRawStringLiteral   (Token &Result, const char *CurPtr,
+  bool LexRawStringLiteral   (Token &Result, unsigned CurOffset,
                               tok::TokenKind Kind);
-  bool LexAngledStringLiteral(Token &Result, const char *CurPtr);
-  bool LexCharConstant       (Token &Result, const char *CurPtr,
+  bool LexAngledStringLiteral(Token &Result, unsigned CurOffset);
+  bool LexCharConstant       (Token &Result, unsigned CurOffset,
                               tok::TokenKind Kind);
-  bool LexEndOfFile          (Token &Result, const char *CurPtr);
-  bool SkipWhitespace        (Token &Result, const char *CurPtr,
+  bool LexEndOfFile          (Token &Result, unsigned CurOffset);
+  bool SkipWhitespace        (Token &Result, unsigned CurOffset,
                               bool &TokAtPhysicalStartOfLine);
-  bool SkipLineComment       (Token &Result, const char *CurPtr,
+  bool SkipLineComment       (Token &Result, unsigned CurOffset,
                               bool &TokAtPhysicalStartOfLine);
-  bool SkipBlockComment      (Token &Result, const char *CurPtr,
+  bool SkipBlockComment      (Token &Result, unsigned CurOffset,
                               bool &TokAtPhysicalStartOfLine);
-  bool SaveLineComment       (Token &Result, const char *CurPtr);
+  bool SaveLineComment       (Token &Result, unsigned CurOffset);
 
-  bool IsStartOfConflictMarker(const char *CurPtr);
-  bool HandleEndOfConflictMarker(const char *CurPtr);
+  bool IsStartOfConflictMarker(unsigned CurOffset);
+  bool HandleEndOfConflictMarker(unsigned CurOffset);
 
-  bool lexEditorPlaceholder(Token &Result, const char *CurPtr);
+  bool lexEditorPlaceholder(Token &Result, unsigned CurOffset);
 
-  bool isCodeCompletionPoint(const char *CurPtr) const;
-  void cutOffLexing() { BufferPtr = BufferEnd; }
+  bool isCodeCompletionPoint(unsigned CurOffset) const;
+  void cutOffLexing() { BufferOffset = BufferSize; }
 
-  bool isHexaLiteral(const char *Start, const LangOptions &LangOpts);
+  bool isHexaLiteral(unsigned Start, const LangOptions &LangOpts);
 
-  void codeCompleteIncludedFile(const char *PathStart,
-                                const char *CompletionPoint, bool IsAngled);
+  void codeCompleteIncludedFile(unsigned PathStart,
+                                unsigned CompletionPoint, bool IsAngled);
 
   std::optional<uint32_t>
-  tryReadNumericUCN(const char *&StartPtr, const char *SlashLoc, Token *Result);
-  std::optional<uint32_t> tryReadNamedUCN(const char *&StartPtr,
-                                          const char *SlashLoc, Token *Result);
+  tryReadNumericUCN(unsigned &StartOffset, unsigned SlashLoc, Token *Result);
+  std::optional<uint32_t> tryReadNamedUCN(unsigned &StartOffset,
+                                           unsigned SlashLoc, Token *Result);
 
   /// Read a universal character name.
   ///
@@ -786,7 +788,7 @@ private:
   ///
   /// \return The Unicode codepoint specified by the UCN, or 0 if the UCN is
   ///         invalid.
-  uint32_t tryReadUCN(const char *&StartPtr, const char *SlashLoc, Token *Result);
+  uint32_t tryReadUCN(unsigned &StartOffset, unsigned SlashLoc, Token *Result);
 
   /// Try to consume a UCN as part of an identifier at the current
   /// location.
@@ -799,7 +801,7 @@ private:
   ///               success.
   /// \return \c true if a UCN was lexed and it produced an acceptable
   ///         identifier character, \c false otherwise.
-  bool tryConsumeIdentifierUCN(const char *&CurPtr, unsigned Size,
+  bool tryConsumeIdentifierUCN(unsigned &CurOffset, unsigned Size,
                                Token &Result);
 
   /// Try to consume an identifier character encoded in UTF-8.
@@ -807,7 +809,7 @@ private:
   ///        sequence. On success, updated to point past the end of it.
   /// \return \c true if a UTF-8 sequence mapping to an acceptable identifier
   ///         character was lexed, \c false otherwise.
-  bool tryConsumeIdentifierUTF8Char(const char *&CurPtr);
+  bool tryConsumeIdentifierUTF8Char(unsigned &CurOffset);
 };
 
 } // namespace clang

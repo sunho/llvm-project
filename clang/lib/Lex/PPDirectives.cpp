@@ -576,7 +576,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
 
     assert(Tok.is(tok::hash));
     const char *Hashptr = CurLexer->getBufferLocation() - Tok.getLength();
-    assert(CurLexer->getSourceLocation(Hashptr) == Tok.getLocation());
+    assert(CurLexer->getSourceLocation(Hashptr - CurLexer->BufferStart) == Tok.getLocation());
 
     // Read the next token, the directive flavor.
     LexUnexpandedToken(Tok);
@@ -2287,7 +2287,7 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
         Token &Result = IncludeTok;
         assert(CurLexer && "#include but no current lexer set!");
         Result.startToken();
-        CurLexer->FormTokenWithChars(Result, CurLexer->BufferEnd, tok::eof);
+        CurLexer->FormTokenWithChars(Result, CurLexer->BufferSize, tok::eof);
         CurLexer->cutOffLexing();
       }
       return {ImportAction::None};

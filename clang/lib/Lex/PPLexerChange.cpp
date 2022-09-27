@@ -264,16 +264,16 @@ void Preprocessor::PropagateLineStartLeadingSpaceInfo(Token &Result) {
 /// rather than "on the line following it", which doesn't exist.  This makes
 /// diagnostics relating to the end of file include the last file that the user
 /// actually typed, which is goodness.
-const char *Preprocessor::getCurLexerEndPos() {
-  const char *EndPos = CurLexer->BufferEnd;
-  if (EndPos != CurLexer->BufferStart &&
-      (EndPos[-1] == '\n' || EndPos[-1] == '\r')) {
+unsigned Preprocessor::getCurLexerEndPos() {
+  unsigned EndPos = CurLexer->BufferSize;
+  if (EndPos != 0 &&
+      (CurLexer->BufferStart[EndPos-1] == '\n' || CurLexer->BufferStart[EndPos-1] == '\r')) {
     --EndPos;
 
     // Handle \n\r and \r\n:
-    if (EndPos != CurLexer->BufferStart &&
-        (EndPos[-1] == '\n' || EndPos[-1] == '\r') &&
-        EndPos[-1] != EndPos[0])
+    if (EndPos != 0 &&
+        (CurLexer->BufferStart[EndPos-1] == '\n' || CurLexer->BufferStart[EndPos-1] == '\r') &&
+        CurLexer->BufferStart[EndPos-1] != CurLexer->BufferStart[EndPos])
       --EndPos;
   }
 
@@ -344,8 +344,8 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
     Module *M = LeaveSubmodule(/*ForPragma*/true);
 
     Result.startToken();
-    const char *EndPos = getCurLexerEndPos();
-    CurLexer->BufferPtr = EndPos;
+    unsigned EndPos = getCurLexerEndPos();
+    CurLexer->BufferOffset = EndPos;
     CurLexer->FormTokenWithChars(Result, EndPos, tok::annot_module_end);
     Result.setAnnotationEndLoc(Result.getLocation());
     Result.setAnnotationValue(M);
@@ -439,7 +439,7 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
             CodeCompletionFileLoc) {
       assert(CurLexer && "Got EOF but no current lexer set!");
       Result.startToken();
-      CurLexer->FormTokenWithChars(Result, CurLexer->BufferEnd, tok::eof);
+      CurLexer->FormTokenWithChars(Result, CurLexer->BufferSize, tok::eof);
       CurLexer.reset();
 
       CurPPLexer = nullptr;
@@ -475,9 +475,9 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
       Module *M = LeaveSubmodule(/*ForPragma*/false);
 
       // Notify the parser that we've left the module.
-      const char *EndPos = getCurLexerEndPos();
+      unsigned EndPos = getCurLexerEndPos();
       Result.startToken();
-      CurLexer->BufferPtr = EndPos;
+      CurLexer->BufferOffset = EndPos;
       CurLexer->FormTokenWithChars(Result, EndPos, tok::annot_module_end);
       Result.setAnnotationEndLoc(Result.getLocation());
       Result.setAnnotationValue(M);
@@ -529,9 +529,9 @@ bool Preprocessor::HandleEndOfFile(Token &Result, bool isEndOfMacro) {
 
   // If this is the end of the main file, form an EOF token.
   assert(CurLexer && "Got EOF but no current lexer set!");
-  const char *EndPos = getCurLexerEndPos();
+  unsigned EndPos = getCurLexerEndPos();
   Result.startToken();
-  CurLexer->BufferPtr = EndPos;
+  CurLexer->BufferOffset = EndPos;
   CurLexer->FormTokenWithChars(Result, EndPos, tok::eof);
 
   if (isCodeCompletionEnabled()) {
