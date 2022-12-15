@@ -16,6 +16,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TokenKinds.h"
+#include "llvm/Support/MemoryBuffer.h"
 #include "clang/Lex/DependencyDirectivesScanner.h"
 #include "clang/Lex/PreprocessorLexer.h"
 #include "clang/Lex/Token.h"
@@ -25,6 +26,7 @@
 #include <cassert>
 #include <cstdint>
 #include <string>
+#include <list>
 
 namespace llvm {
 
@@ -183,6 +185,9 @@ public:
 
   Lexer(const Lexer &) = delete;
   Lexer &operator=(const Lexer &) = delete;
+
+  bool TryExpandBuffer();
+  bool DisableExpand = false;
 
   /// Create_PragmaLexer: Lexer constructor - Create a new lexer object for
   /// _Pragma expansion.  This has a variety of magic semantics that this method
@@ -444,6 +449,10 @@ public:
                ? getAsCharRange(Range.getAsRange(), SM, LangOpts)
                : Range;
   }
+
+  llvm::MemoryBufferRef Origin;
+  std::list<std::string> TokStrings;
+  std::unique_ptr<llvm::MemoryBuffer> Mine;
 
   /// Returns true if the given MacroID location points at the first
   /// token of the macro expansion.

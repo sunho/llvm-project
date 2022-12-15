@@ -50,6 +50,7 @@
 
 using namespace clang;
 
+static std::list<std::string> GTokStrings;
 //===----------------------------------------------------------------------===//
 // Token Class Implementation
 //===----------------------------------------------------------------------===//
@@ -142,6 +143,11 @@ Lexer::Lexer(FileID FID, const llvm::MemoryBufferRef &InputFile,
   InitLexer(InputFile.getBufferStart(), 0,
             InputFile.getBufferSize());
 
+  Origin = InputFile;
+  BufferSize = 0;
+  BufferStart = InputFile.getBufferStart();
+  TryExpandBuffer();
+
   resetExtendedTokenMode();
 }
 
@@ -154,7 +160,7 @@ Lexer::Lexer(SourceLocation fileloc, const LangOptions &langOpts,
     : FileLoc(fileloc), LangOpts(langOpts), LineComment(LangOpts.LineComment),
       IsFirstTimeLexingFile(IsFirstIncludeOfFile) {
   InitLexer(BufStart, BufPtr-BufStart, BufEnd-BufStart);
-
+  Origin = {};
   // We *are* in raw mode.
   LexingRawMode = true;
 }
@@ -211,6 +217,7 @@ Lexer *Lexer::Create_PragmaLexer(SourceLocation SpellingLoc,
   L->BufferStart = InputFile.getBufferStart();
   L->BufferOffset = StrData - InputFile.getBufferStart(); // FIXME: this is wrong
   L->BufferSize = L->BufferOffset + TokLen;
+  L->DisableExpand = true;
   assert(L->BufferStart[L->BufferSize] == 0 && "Buffer is not nul terminated!");
 
   // Set the SourceLocation with the remapping information.  This ensures that
@@ -443,6 +450,33 @@ unsigned Lexer::getSpelling(const Token &Tok, const char *&Buffer,
 
   // Otherwise, hard case, relex the characters into the string.
   return getSpellingSlow(Tok, TokStart, LangOpts, const_cast<char*>(Buffer));
+}
+
+ bool Lexer::TryExpandBuffer() {
+  if (DisableExpand || !Origin.getBufferSize()) {
+    return false;
+  }
+  if (Origin.getBufferSize() == BufferSize) {
+    return false;
+  }
+  llvm::outs() << BufferSize << " " << Origin.getBufferSize() << "\n";
+  auto first = llvm::StringRef(Origin.getBufferStart() + BufferSize, Origin.getBufferSize() - BufferSize).find_first_of('\n');
+  int StrSize;
+  if (first == llvm::StringRef::npos) {
+    StrSize = Origin.getBufferSize();
+  } else {
+    StrSize = std::min(BufferSize+first+1, Origin.getBufferSize());
+  }
+
+  std::unique_ptr<llvm::WritableMemoryBuffer> MB(
+      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(StrSize,
+                                                        ""));
+  char* C = std::copy(Origin.getBufferStart(), Origin.getBufferStart() + StrSize, MB->getBuffer().data());
+  *(C) = '\0';
+  BufferStart = MB->getBufferStart();
+  BufferSize = MB->getBufferSize();
+  Mine = std::move(MB);
+  return true;
 }
 
 /// MeasureTokenLength - Relex the token at the specified location and return
@@ -1360,6 +1394,9 @@ Slash:
       Size += EscapedNewLineSize;
       Offset  += EscapedNewLineSize;
 
+      if (BufferStart[Offset] == 0 && Offset == BufferSize) 
+        TryExpandBuffer();
+
       // Use slow version to accumulate a correct size field.
       return getCharAndSizeSlow(Offset, Size, Tok);
     }
@@ -1796,8 +1833,9 @@ bool Lexer::LexIdentifierContinue(Token &Result, unsigned CurOffset) {
   }
 
   const char *IdStart = BufferStart + BufferOffset;
+  GTokStrings.push_back(std::string(IdStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, tok::raw_identifier);
-  Result.setRawIdentifierData(IdStart);
+  Result.setRawIdentifierData(GTokStrings.back().data());
 
   // If we are in raw mode, return this identifier raw.  There is no need to
   // look up identifier information or attempt to macro expand it.
@@ -1914,8 +1952,9 @@ bool Lexer::LexNumericConstant(Token &Result, unsigned CurOffset) {
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferStart + BufferOffset;
+  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, tok::numeric_constant);
-  Result.setLiteralData(TokStart);
+  Result.setLiteralData(GTokStrings.back().data());
   return true;
 }
 
@@ -2067,8 +2106,9 @@ bool Lexer::LexStringLiteral(Token &Result, unsigned CurOffset,
 
   // Update the location of the token as well as the BufferPtr instance var.
   const char *TokStart = BufferStart + BufferOffset;
+  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(TokStart);
+  Result.setLiteralData(GTokStrings.back().data());
   return true;
 }
 
@@ -2147,8 +2187,9 @@ bool Lexer::LexRawStringLiteral(Token &Result, unsigned CurOffset,
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = &BufferStart[BufferOffset];
+  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(TokStart);
+  Result.setLiteralData(GTokStrings.back().data());
   return true;
 }
 
@@ -2191,8 +2232,9 @@ bool Lexer::LexAngledStringLiteral(Token &Result, unsigned CurOffset) {
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = &BufferStart[BufferOffset];
+  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, tok::header_name);
-  Result.setLiteralData(TokStart);
+  Result.setLiteralData(GTokStrings.back().data());
   return true;
 }
 
@@ -2259,7 +2301,7 @@ bool Lexer::LexCharConstant(Token &Result, unsigned CurOffset,
       C = getAndAdvanceChar(CurOffset, Result);
 
     if (C == '\n' || C == '\r' ||             // Newline.
-        (C == 0 && CurOffset-1 == BufferSize)) {  // End of file.
+        (C == 0 && CurOffset-1 == BufferSize && !TryExpandBuffer())) {  // End of file.
       if (!isLexingRawMode() && !LangOpts.AsmPreprocessor)
         Diag(BufferOffset, diag::ext_unterminated_char_or_string) << 0;
       FormTokenWithChars(Result, CurOffset-1, tok::unknown);
@@ -2289,8 +2331,9 @@ bool Lexer::LexCharConstant(Token &Result, unsigned CurOffset,
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferStart + BufferOffset;
+  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(TokStart);
+  Result.setLiteralData(GTokStrings.back().data());
   return true;
 }
 
@@ -2319,6 +2362,11 @@ bool Lexer::SkipWhitespace(Token &Result, unsigned CurOffset,
     // Skip horizontal whitespace very aggressively.
     while (isHorizontalWhitespace(Char))
       Char = BufferStart[++CurOffset];
+
+    if (Char == 0 && CurOffset == BufferSize+1 && TryExpandBuffer()) {
+      --CurOffset;
+      continue;
+    }
 
     // Otherwise if we have something other than whitespace, we're done.
     if (!isVerticalWhitespace(Char))
@@ -2404,10 +2452,14 @@ bool Lexer::SkipLineComment(Token &Result, unsigned CurOffset,
   while (true) {
     C = BufferStart[CurOffset];
     // Skip over characters in the fast loop.
-    while (isASCII(C) && C != 0 &&   // Potentially EOF.
-           C != '\n' && C != '\r') { // Newline or DOS-style newline.
-      C = BufferStart[++CurOffset];
-      UnicodeDecodingAlreadyDiagnosed = false;
+    while (true) {
+      while (isASCII(C) && C != 0 &&   // Potentially EOF.
+            C != '\n' && C != '\r') { // Newline or DOS-style newline.
+        C = BufferStart[++CurOffset];
+        UnicodeDecodingAlreadyDiagnosed = false;
+      }
+      if (C != 0 || CurOffset != BufferSize + 1 || !TryExpandBuffer()) break;
+      C = BufferStart[CurOffset];
     }
 
     if (!isASCII(C)) {
@@ -2490,7 +2542,15 @@ bool Lexer::SkipLineComment(Token &Result, unsigned CurOffset,
         }
     }
 
-    if (C == '\r' || C == '\n' || CurOffset == BufferSize + 1) {
+    if (CurOffset == BufferSize + 1) {
+      if (!TryExpandBuffer()) {
+        --CurOffset;
+        break;
+      }
+      continue;
+    }
+
+    if (C == '\r' || C == '\n') {
       --CurOffset;
       break;
     }
@@ -2669,7 +2729,7 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
   unsigned CharSize;
   unsigned char C = getCharAndSize(CurOffset, CharSize);
   CurOffset += CharSize;
-  if (C == 0 && CurOffset == BufferSize+1) {
+  if (C == 0 && CurOffset == BufferSize+1 && !TryExpandBuffer()) {
     if (!isLexingRawMode())
       Diag(BufferOffset, diag::err_unterminated_block_comment);
     --CurOffset;
@@ -2697,6 +2757,9 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
   bool UnicodeDecodingAlreadyDiagnosed = false;
 
   while (true) {
+    if (CurOffset + 24 >= BufferSize) {
+      TryExpandBuffer();
+    }
     // Skip over all non-interesting characters until we find end of buffer or a
     // (probably ending) '/' character.
     if (CurOffset + 24 < BufferSize &&
@@ -2815,6 +2878,9 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
         if (!isLexingRawMode())
           Diag(CurOffset-1, diag::warn_nested_block_comment);
       }
+    } else if (C == 0 && CurOffset == BufferSize+1 && TryExpandBuffer()) {
+      --CurOffset;
+      continue;
     } else if (C == 0 && CurOffset == BufferSize+1) {
       if (!isLexingRawMode())
         Diag(BufferOffset, diag::err_unterminated_block_comment);
@@ -2893,7 +2959,7 @@ void Lexer::ReadToEndOfLine(SmallVectorImpl<char> *Result) {
       break;
     case 0:  // Null.
       // Found end of file?
-      if (CurOffset-1 != BufferSize) {
+      if (CurOffset-1 != BufferSize && !TryExpandBuffer()) {
         if (isCodeCompletionPoint(CurOffset-1)) {
           PP->CodeCompleteNaturalLanguage();
           cutOffLexing();
@@ -3172,6 +3238,8 @@ bool Lexer::lexEditorPlaceholder(Token &Result, unsigned CurOffset) {
   assert(BufferStart[CurOffset-1] == '<' && BufferStart[CurOffset] == '#' && "Not a placeholder!");
   if (!PP || !PP->getPreprocessorOpts().LexEditorPlaceholders || LexingRawMode)
     return false;
+  if (CurOffset + 1 == BufferSize) 
+    TryExpandBuffer();
   const char *End = findPlaceholderEnd(BufferStart + CurOffset + 1, BufferStart + BufferSize);
   if (!End)
     return false;
@@ -3179,8 +3247,9 @@ bool Lexer::lexEditorPlaceholder(Token &Result, unsigned CurOffset) {
   if (!LangOpts.AllowEditorPlaceholders)
     Diag(CurOffset - 1, diag::err_placeholder_in_source);
   Result.startToken();
+  GTokStrings.push_back(std::string(Start, End - Start));
   FormTokenWithChars(Result, End - BufferStart, tok::raw_identifier);
-  Result.setRawIdentifierData(Start);
+  Result.setRawIdentifierData(GTokStrings.back().data());
   PP->LookUpIdentifierInfo(Result);
   Result.setFlag(Token::IsEditorPlaceholder);
   BufferOffset = End - BufferStart;
@@ -3528,8 +3597,10 @@ LexNextToken:
   // Small amounts of horizontal whitespace is very common between tokens.
   if (isHorizontalWhitespace(BufferStart[CurOffset])) {
     do {
-      ++CurOffset;
-    } while (isHorizontalWhitespace(BufferStart[CurOffset]));
+      do {
+        ++CurOffset;
+      } while (isHorizontalWhitespace(BufferStart[CurOffset]));
+    } while (BufferStart[CurOffset] == 0 && CurOffset == BufferSize && TryExpandBuffer());
 
     // If we are keeping whitespace and other tokens, just return what we just
     // skipped.  The next lexer invocation will return the token after the
@@ -3556,8 +3627,12 @@ LexNextToken:
   switch (Char) {
   case 0:  // Null.
     // Found end of file?
-    if (CurOffset-1 == BufferSize)
+    if (CurOffset-1 == BufferSize) {
+      if (TryExpandBuffer()) {
+        goto LexNextToken;
+      }
       return LexEndOfFile(Result, CurOffset-1);
+    }
 
     // Check if we are performing code completion.
     if (isCodeCompletionPoint(CurOffset-1)) {
@@ -4309,13 +4384,14 @@ HandleDirective:
 const char *Lexer::convertDependencyDirectiveToken(
     const dependency_directives_scan::Token &DDTok, Token &Result) {
   const char *TokPtr = BufferStart + DDTok.Offset;
+  GTokStrings.push_back(std::string(TokPtr, DDTok.Length));
   Result.startToken();
   Result.setLocation(getSourceLocation(TokPtr-BufferStart));
   Result.setKind(DDTok.Kind);
   Result.setFlag((Token::TokenFlags)DDTok.Flags);
   Result.setLength(DDTok.Length);
   BufferOffset = TokPtr + DDTok.Length - BufferStart;
-  return TokPtr;
+  return GTokStrings.back().data();
 }
 
 bool Lexer::LexDependencyDirectiveToken(Token &Result) {
