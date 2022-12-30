@@ -53,15 +53,22 @@ class Interpreter {
   Interpreter(std::unique_ptr<CompilerInstance> CI, llvm::Error &Err);
 
 public:
+  using ReceiveAdditionalLine = std::function<llvm::Optional<std::string>()>;
   ~Interpreter();
   static llvm::Expected<std::unique_ptr<Interpreter>>
   create(std::unique_ptr<CompilerInstance> CI);
   const CompilerInstance *getCompilerInstance() const;
   const llvm::orc::LLJIT *getExecutionEngine() const;
-  llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Code);
+  ///\param RecvLine a callback that will be called to get additional lines
+  ///required to finish parsing.
+  llvm::Expected<PartialTranslationUnit &>
+  Parse(llvm::StringRef Code, ReceiveAdditionalLine RecvLine = nullptr);
   llvm::Error Execute(PartialTranslationUnit &T);
-  llvm::Error ParseAndExecute(llvm::StringRef Code) {
-    auto PTU = Parse(Code);
+  ///\param RecvLine a callback that will be called to get additional lines
+  ///required to finish parsing.
+  llvm::Error ParseAndExecute(llvm::StringRef Code,
+    ReceiveAdditionalLine RecvLine = nullptr) {
+    auto PTU = Parse(Code, RecvLine);
     if (!PTU)
       return PTU.takeError();
     if (PTU->TheModule)

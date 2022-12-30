@@ -13,18 +13,22 @@
 #include "IncrementalParser.h"
 
 #include "clang/AST/DeclContextInternals.h"
+#include "clang/Basic/SourceLocation.h"
+#include "clang/Basic/TokenKinds.h"
 #include "clang/CodeGen/BackendUtil.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/FrontendTool/Utils.h"
+#include "clang/Lex/Preprocessor.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Sema.h"
 
 #include "llvm/Option/ArgList.h"
 #include "llvm/Support/CrashRecoveryContext.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Timer.h"
 
 #include <sstream>
@@ -217,40 +221,165 @@ static CodeGenerator *getCodeGen(FrontendAction *Act) {
   return static_cast<CodeGenAction *>(WrappedAct)->getCodeGenerator();
 }
 
+static std::unique_ptr<llvm::MemoryBuffer>
+CreateMemoryBuffer(llvm::StringRef SourceName, llvm::StringRef Str) {
+  // Create an uninitialized memory buffer, copy code in and append "\n"
+  size_t StrSize = Str.size(); // don't include trailing 0
+  // MemBuffer size should *not* include terminating zero
+  std::unique_ptr<llvm::MemoryBuffer> MB(
+      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(StrSize + 1,
+                                                        SourceName));
+  char *MBStart = const_cast<char *>(MB->getBufferStart());
+  memcpy(MBStart, Str.data(), StrSize);
+  MBStart[StrSize] = '\n';
+  return MB;
+}
+
+class IncrementalInputReceiver : public SourceFileGrower {
+public:
+  IncrementalInputReceiver(Preprocessor &PP, SourceManager &SM, IncrementalParser::ReceiveAdditionalLine RecvLine): 
+    PP(PP), SM(SM), RecvLine(RecvLine) {
+  }
+
+  llvm::Expected<FileID>
+  Receive(StringRef InitialCode,
+                                                StringRef SourceName) {
+    // Buffer holding collected source code
+    CodeBuffer = InitialCode.str();
+    CodeBuffer += '\n';
+    const clang::FileEntry* FE
+      = SM.getFileManager().getVirtualFile(SourceName, CodeBuffer.size(),
+                                           0 /* mod time*/);
+    CurFileID = SM.createFileID(FE, SourceLocation(), SrcMgr::C_User);
+    PP.setSourceFileGrower(this);
+    SM.overrideFileContents(FE, llvm::MemoryBufferRef(CodeBuffer, ""));
+
+    SourceLocation NewLoc = SM.getLocForStartOfFile(CurFileID);
+    if (PP.EnterSourceFile(CurFileID, /*DirLookup=*/nullptr, NewLoc))
+      return llvm::make_error<llvm::StringError>("Parsing failed. "
+                                                 "Cannot enter source file.",
+                                                 std::error_code());
+    Token Tok;
+    do {
+      if (Err) {
+        PP.EndSourceFile();
+        PP.setSourceFileGrower(nullptr);
+        return std::move(Err);
+      }
+      PP.Lex(Tok);
+      switch(Tok.getKind()) {
+        case tok::l_brace:
+        case tok::l_paren:
+        case tok::l_square: {
+          BraceLevel[Tok.getKind()]++;
+          break;
+        }
+        case tok::r_brace:
+        case tok::r_paren:
+        case tok::r_square: {
+          if (BraceLevel[ToLBracket(Tok.getKind())] == 0) {
+            PP.EndSourceFile();
+            PP.setSourceFileGrower(nullptr);
+            return llvm::make_error<llvm::StringError>("Parsing failed. "
+                                                      "Unmathced braces.",
+                                                      std::error_code());
+          }
+          BraceLevel[ToLBracket(Tok.getKind())]--;
+          break;
+        }
+        default:
+          break;
+      }
+    } while (Tok.isNot(tok::eof));
+    PP.EndSourceFile();
+    PP.setSourceFileGrower(nullptr);
+
+    return SM.createFileID(CreateMemoryBuffer(SourceName, CodeBuffer),
+                         SrcMgr::C_User, /*LoadedID=*/0,
+                         /*LoadedOffset=*/0);
+  }
+
+  tok::TokenKind ToLBracket(tok::TokenKind Tok) {
+    switch (Tok) {
+      case tok::r_brace:
+        return tok::l_brace;
+      case tok::r_paren:
+        return tok::l_paren;
+      case tok::r_square:
+        return tok::l_square;
+      default:
+        return tok::unknown;
+    }
+  }
+
+  ~IncrementalInputReceiver() = default;
+
+  bool TryGrowFile(FileID FileID) override {
+    if (FileID != CurFileID)
+      return false;
+    if (IsBraceLevelZero())
+      return false;
+     if (auto Line = RecvLine()) {
+        CodeBuffer += *Line;
+        CodeBuffer += '\n';
+        const FileEntry* Entry = SM.getFileEntryForID(CurFileID);
+        assert(Entry);
+        SM.overrideFileContents(Entry, llvm::MemoryBufferRef(CodeBuffer, ""));
+        return true;
+      } 
+      Err = llvm::make_error<llvm::StringError>("Parsing failed. "
+                                                  "Truncated code.",
+                                                  std::error_code());
+      return false;            
+  }
+
+  bool IsBraceLevelZero() {
+    for (auto [Tok, Level]: BraceLevel) {
+      (void)Tok;
+      if (Level)
+        return false;
+    }
+    return true;
+  }
+private:
+  Preprocessor &PP;
+  SourceManager &SM;
+  llvm::Error Err = llvm::Error::success();
+  FileID CurFileID;
+  std::string CodeBuffer;
+  IncrementalParser::ReceiveAdditionalLine RecvLine;
+  llvm::DenseMap<unsigned short, unsigned> BraceLevel;
+};
+
+// If RecvLine is not null, this will repeatedly call RecvLine function to fetch
+// the additional lines required to finish a cut-off multiline function
+// definition.
+llvm::Expected<FileID>
+IncrementalParser::ReceiveCompleteSourceInput(ReceiveAdditionalLine RecvLine,
+                                              StringRef InitialCode,
+                                              StringRef SourceName) {
+  IncrementalInputReceiver InputReciever(CI->getPreprocessor(), CI->getSourceManager(), RecvLine);
+  return InputReciever.Receive(InitialCode, SourceName);
+}
+
 llvm::Expected<PartialTranslationUnit &>
-IncrementalParser::Parse(llvm::StringRef input) {
+  IncrementalParser::Parse(llvm::StringRef Input,
+                          ReceiveAdditionalLine RecvLine) {
   Preprocessor &PP = CI->getPreprocessor();
   assert(PP.isIncrementalProcessingEnabled() && "Not in incremental mode!?");
 
-  std::ostringstream SourceName;
-  SourceName << "input_line_" << InputCount++;
-
-  // Create an uninitialized memory buffer, copy code in and append "\n"
-  size_t InputSize = input.size(); // don't include trailing 0
-  // MemBuffer size should *not* include terminating zero
-  std::unique_ptr<llvm::MemoryBuffer> MB(
-      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(InputSize + 1,
-                                                        SourceName.str()));
-  char *MBStart = const_cast<char *>(MB->getBufferStart());
-  memcpy(MBStart, input.data(), InputSize);
-  MBStart[InputSize] = '\n';
+  auto SourceName = ("input_line_" + llvm::Twine(InputCount++)).str();
 
   SourceManager &SM = CI->getSourceManager();
+  auto FID = ReceiveCompleteSourceInput(RecvLine, Input, SourceName);
+  if (!FID)
+    return FID.takeError();
 
-  // FIXME: Create SourceLocation, which will allow clang to order the overload
-  // candidates for example
-  SourceLocation NewLoc = SM.getLocForStartOfFile(SM.getMainFileID());
-
-  // Create FileID for the current buffer.
-  FileID FID = SM.createFileID(std::move(MB), SrcMgr::C_User, /*LoadedID=*/0,
-                               /*LoadedOffset=*/0, NewLoc);
-
-  // NewLoc only used for diags.
-  if (PP.EnterSourceFile(FID, /*DirLookup=*/nullptr, NewLoc))
+  SourceLocation NewLoc = SM.getLocForStartOfFile(*FID);
+  if (PP.EnterSourceFile(*FID, /*DirLookup=*/nullptr, NewLoc))
     return llvm::make_error<llvm::StringError>("Parsing failed. "
-                                               "Cannot enter source file.",
-                                               std::error_code());
-
+                                            "Cannot enter source file.",
+                                              std::error_code());
   auto PTU = ParseOrWrapTopLevelDecl();
   if (!PTU)
     return PTU.takeError();

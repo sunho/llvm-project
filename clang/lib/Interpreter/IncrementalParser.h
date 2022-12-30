@@ -57,16 +57,19 @@ class IncrementalParser {
   std::list<PartialTranslationUnit> PTUs;
 
 public:
+  using ReceiveAdditionalLine = std::function<llvm::Optional<std::string>()>;
   IncrementalParser(std::unique_ptr<CompilerInstance> Instance,
                     llvm::LLVMContext &LLVMCtx, llvm::Error &Err);
   ~IncrementalParser();
 
   const CompilerInstance *getCI() const { return CI.get(); }
 
-  /// Parses incremental input by creating an in-memory file.
-  ///\returns a \c PartialTranslationUnit which holds information about the
+  ///\param RecvLine a callback that will be called to get additional lines
+  ///required to finish parsing. \returns a \c PartialTranslationUnit which
+  ///holds information about the
   /// \c TranslationUnitDecl and \c llvm::Module corresponding to the input.
-  llvm::Expected<PartialTranslationUnit &> Parse(llvm::StringRef Input);
+  llvm::Expected<PartialTranslationUnit &>
+  Parse(llvm::StringRef Input, ReceiveAdditionalLine RecvLine = nullptr);
 
   /// Uses the CodeGenModule mangled name cache and avoids recomputing.
   ///\returns the mangled name of a \c GD.
@@ -77,6 +80,9 @@ public:
   std::list<PartialTranslationUnit> &getPTUs() { return PTUs; }
 
 private:
+  llvm::Expected<FileID>
+  ReceiveCompleteSourceInput(ReceiveAdditionalLine RecvLine,
+    StringRef InitialCode, StringRef SourceName);
   llvm::Expected<PartialTranslationUnit &> ParseOrWrapTopLevelDecl();
 };
 } // end namespace clang

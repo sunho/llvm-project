@@ -186,6 +186,16 @@ Preprocessor::~Preprocessor() {
     delete &HeaderInfo;
 }
 
+llvm::Optional<llvm::MemoryBufferRef> Preprocessor::TryGrowFile() {
+  if (!FileGrower) 
+    return llvm::None;
+  if (!FileGrower->TryGrowFile(CurLexer->getFileID())) 
+    return llvm::None;
+  const FileEntry* Entry = SourceMgr.getFileEntryForID((CurLexer->getFileID()));
+  assert(Entry);
+  return SourceMgr.getMemoryBufferForFileOrNone(Entry);
+}
+
 void Preprocessor::Initialize(const TargetInfo &Target,
                               const TargetInfo *AuxTarget) {
   assert((!this->Target || this->Target == &Target) &&
@@ -1474,6 +1484,8 @@ CommentHandler::~CommentHandler() = default;
 EmptylineHandler::~EmptylineHandler() = default;
 
 CodeCompletionHandler::~CodeCompletionHandler() = default;
+
+SourceFileGrower::~SourceFileGrower() = default;
 
 void Preprocessor::createPreprocessingRecord() {
   if (Record)

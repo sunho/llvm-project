@@ -16,6 +16,7 @@
 #include "clang/Basic/LangOptions.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/TokenKinds.h"
+#include "llvm/ADT/FunctionExtras.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "clang/Lex/DependencyDirectivesScanner.h"
 #include "clang/Lex/PreprocessorLexer.h"
@@ -145,6 +146,9 @@ class Lexer : public PreprocessorLexer {
   /// True if this is the first time we're lexing the input file.
   bool IsFirstTimeLexingFile;
 
+  using GrowBufferCallback = llvm::unique_function<llvm::Optional<llvm::MemoryBufferRef>()>;
+  GrowBufferCallback GrowBuffer;
+
   // NewLineOffset - A offset to new line character '\n' being lexed. For '\r\n',
   // it also points to '\n.'
   Optional<unsigned> NewLineOffset;
@@ -167,7 +171,7 @@ public:
   /// assumes that the associated file buffer and Preprocessor objects will
   /// outlive it, so it doesn't take ownership of either of them.
   Lexer(FileID FID, const llvm::MemoryBufferRef &InputFile, Preprocessor &PP,
-        bool IsFirstIncludeOfFile = true);
+        bool IsFirstIncludeOfFile = true, GrowBufferCallback GrowBuffer = nullptr);
 
   /// Lexer constructor - Create a new raw lexer object.  This object is only
   /// suitable for calls to 'LexFromRawLexer'.  This lexer assumes that the
@@ -187,7 +191,6 @@ public:
   Lexer &operator=(const Lexer &) = delete;
 
   bool TryExpandBuffer();
-  bool DisableExpand = false;
 
   /// Create_PragmaLexer: Lexer constructor - Create a new lexer object for
   /// _Pragma expansion.  This has a variety of magic semantics that this method
@@ -449,10 +452,6 @@ public:
                ? getAsCharRange(Range.getAsRange(), SM, LangOpts)
                : Range;
   }
-
-  llvm::MemoryBufferRef Origin;
-  std::list<std::string> TokStrings;
-  std::unique_ptr<llvm::MemoryBuffer> Mine;
 
   /// Returns true if the given MacroID location points at the first
   /// token of the macro expansion.

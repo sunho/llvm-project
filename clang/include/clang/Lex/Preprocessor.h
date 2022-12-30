@@ -46,6 +46,7 @@
 #include "llvm/ADT/iterator_range.h"
 #include "llvm/Support/Allocator.h"
 #include "llvm/Support/Casting.h"
+#include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Registry.h"
 #include <cassert>
 #include <cstddef>
@@ -79,6 +80,7 @@ class PreprocessingRecord;
 class PreprocessorLexer;
 class PreprocessorOptions;
 class ScratchBuffer;
+class SourceFileGrower;
 class TargetInfo;
 
 namespace Builtin {
@@ -281,6 +283,8 @@ class Preprocessor {
 
   /// Empty line handler.
   EmptylineHandler *Emptyline = nullptr;
+
+  SourceFileGrower *FileGrower = nullptr;
 
   /// True if we want to ignore EOF token and continue later on (thus
   /// avoid tearing the Lexer and etc. down).
@@ -1792,6 +1796,11 @@ public:
     IncrementalProcessing = value;
   }
 
+  void setSourceFileGrower(SourceFileGrower* Val) { 
+    FileGrower = Val; 
+  }
+  SourceFileGrower* getSourceFileGrower() const { return FileGrower; } 
+
   /// Specify the point at which code-completion will be performed.
   ///
   /// \param File the file in which code completion should occur. If
@@ -2274,6 +2283,8 @@ public:
   void EnterSubmodule(Module *M, SourceLocation ImportLoc, bool ForPragma);
   Module *LeaveSubmodule(bool ForPragma);
 
+  llvm::Optional<llvm::MemoryBufferRef> TryGrowFile();
+
 private:
   friend void TokenLexer::ExpandFunctionArguments();
 
@@ -2718,6 +2729,13 @@ public:
 
   // The handler handles empty lines.
   virtual void HandleEmptyline(SourceRange Range) = 0;
+};
+
+class SourceFileGrower {
+public:
+  virtual ~SourceFileGrower();
+
+  virtual bool TryGrowFile(FileID FileID) = 0;
 };
 
 /// Registry of pragma handlers added by plugins

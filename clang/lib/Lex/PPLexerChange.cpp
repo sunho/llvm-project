@@ -91,7 +91,9 @@ bool Preprocessor::EnterSourceFile(FileID FID, ConstSearchDirIterator CurDir,
         CodeCompletionFileLoc.getLocWithOffset(CodeCompletionOffset);
   }
 
-  Lexer *TheLexer = new Lexer(FID, *InputFile, *this, IsFirstIncludeOfFile);
+  Lexer *TheLexer = new Lexer(FID, *InputFile, *this, IsFirstIncludeOfFile, [this]() {
+    return this->TryGrowFile();
+  });
   if (getPreprocessorOpts().DependencyDirectivesForFile &&
       FID != PredefinesFileID) {
     if (Optional<FileEntryRef> File = SourceMgr.getFileEntryRefForID(FID)) {

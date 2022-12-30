@@ -135,18 +135,14 @@ void Lexer::InitLexer(const char *BufStart, unsigned BufOffset,
 /// assumes that the associated file buffer and Preprocessor objects will
 /// outlive it, so it doesn't take ownership of either of them.
 Lexer::Lexer(FileID FID, const llvm::MemoryBufferRef &InputFile,
-             Preprocessor &PP, bool IsFirstIncludeOfFile)
+             Preprocessor &PP, bool IsFirstIncludeOfFile, GrowBufferCallback GrowBuffer)
     : PreprocessorLexer(&PP, FID),
       FileLoc(PP.getSourceManager().getLocForStartOfFile(FID)),
       LangOpts(PP.getLangOpts()), LineComment(LangOpts.LineComment),
-      IsFirstTimeLexingFile(IsFirstIncludeOfFile) {
+      IsFirstTimeLexingFile(IsFirstIncludeOfFile), 
+      GrowBuffer(std::move(GrowBuffer)) {
   InitLexer(InputFile.getBufferStart(), 0,
             InputFile.getBufferSize());
-
-  Origin = InputFile;
-  BufferSize = 0;
-  BufferStart = InputFile.getBufferStart();
-  TryExpandBuffer();
 
   resetExtendedTokenMode();
 }
@@ -160,7 +156,6 @@ Lexer::Lexer(SourceLocation fileloc, const LangOptions &langOpts,
     : FileLoc(fileloc), LangOpts(langOpts), LineComment(LangOpts.LineComment),
       IsFirstTimeLexingFile(IsFirstIncludeOfFile) {
   InitLexer(BufStart, BufPtr-BufStart, BufEnd-BufStart);
-  Origin = {};
   // We *are* in raw mode.
   LexingRawMode = true;
 }
@@ -217,7 +212,6 @@ Lexer *Lexer::Create_PragmaLexer(SourceLocation SpellingLoc,
   L->BufferStart = InputFile.getBufferStart();
   L->BufferOffset = StrData - InputFile.getBufferStart(); // FIXME: this is wrong
   L->BufferSize = L->BufferOffset + TokLen;
-  L->DisableExpand = true;
   assert(L->BufferStart[L->BufferSize] == 0 && "Buffer is not nul terminated!");
 
   // Set the SourceLocation with the remapping information.  This ensures that
@@ -453,29 +447,15 @@ unsigned Lexer::getSpelling(const Token &Tok, const char *&Buffer,
 }
 
  bool Lexer::TryExpandBuffer() {
-  if (DisableExpand || !Origin.getBufferSize()) {
+  if (!GrowBuffer)
     return false;
-  }
-  if (Origin.getBufferSize() == BufferSize) {
+  
+  auto NewBuffer = GrowBuffer();
+  if (!NewBuffer)
     return false;
-  }
-  llvm::outs() << BufferSize << " " << Origin.getBufferSize() << "\n";
-  auto first = llvm::StringRef(Origin.getBufferStart() + BufferSize, Origin.getBufferSize() - BufferSize).find_first_of('\n');
-  int StrSize;
-  if (first == llvm::StringRef::npos) {
-    StrSize = Origin.getBufferSize();
-  } else {
-    StrSize = std::min(BufferSize+first+1, Origin.getBufferSize());
-  }
 
-  std::unique_ptr<llvm::WritableMemoryBuffer> MB(
-      llvm::WritableMemoryBuffer::getNewUninitMemBuffer(StrSize,
-                                                        ""));
-  char* C = std::copy(Origin.getBufferStart(), Origin.getBufferStart() + StrSize, MB->getBuffer().data());
-  *(C) = '\0';
-  BufferStart = MB->getBufferStart();
-  BufferSize = MB->getBufferSize();
-  Mine = std::move(MB);
+  BufferStart = NewBuffer->getBufferStart();
+  BufferSize = NewBuffer->getBufferSize();
   return true;
 }
 

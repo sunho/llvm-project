@@ -213,8 +213,8 @@ const llvm::orc::LLJIT *Interpreter::getExecutionEngine() const {
 }
 
 llvm::Expected<PartialTranslationUnit &>
-Interpreter::Parse(llvm::StringRef Code) {
-  return IncrParser->Parse(Code);
+Interpreter::Parse(llvm::StringRef Code, ReceiveAdditionalLine RecvLine) {
+  return IncrParser->Parse(Code, RecvLine);
 }
 
 llvm::Error Interpreter::Execute(PartialTranslationUnit &T) {
