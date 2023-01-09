@@ -818,6 +818,8 @@ private:
   /// \return \c true if a UTF-8 sequence mapping to an acceptable identifier
   ///         character was lexed, \c false otherwise.
   bool tryConsumeIdentifierUTF8Char(unsigned &CurOffset);
+
+  void SetTokString(Token& Tok, StringRef Data);
 };
 
 } // namespace clang

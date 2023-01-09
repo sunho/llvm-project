@@ -21,7 +21,9 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/FrontendTool/Utils.h"
+#include "clang/Lex/PPCallbacks.h"
 #include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/PreprocessorLexer.h"
 #include "clang/Parse/Parser.h"
 #include "clang/Sema/Sema.h"
 
@@ -334,9 +336,11 @@ public:
   }
 
   bool IsBraceLevelZero() {
-    for (auto [Tok, Level]: BraceLevel) {
-      (void)Tok;
-      if (Level)
+    PreprocessorLexer* CurLexer = PP.getCurrentLexer();
+    if (CurLexer && CurLexer->conditional_begin() != CurLexer->conditional_end())
+      return false;
+    for (auto& It : BraceLevel) {
+      if (It.second)
         return false;
     }
     return true;

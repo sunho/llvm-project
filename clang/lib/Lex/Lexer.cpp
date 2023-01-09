@@ -50,7 +50,6 @@
 
 using namespace clang;
 
-static std::list<std::string> GTokStrings;
 //===----------------------------------------------------------------------===//
 // Token Class Implementation
 //===----------------------------------------------------------------------===//
@@ -1813,9 +1812,9 @@ bool Lexer::LexIdentifierContinue(Token &Result, unsigned CurOffset) {
   }
 
   const char *IdStart = BufferStart + BufferOffset;
-  GTokStrings.push_back(std::string(IdStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
   FormTokenWithChars(Result, CurOffset, tok::raw_identifier);
-  Result.setRawIdentifierData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(IdStart, TokLen));
 
   // If we are in raw mode, return this identifier raw.  There is no need to
   // look up identifier information or attempt to macro expand it.
@@ -1932,9 +1931,9 @@ bool Lexer::LexNumericConstant(Token &Result, unsigned CurOffset) {
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferStart + BufferOffset;
-  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
   FormTokenWithChars(Result, CurOffset, tok::numeric_constant);
-  Result.setLiteralData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(TokStart, TokLen));
   return true;
 }
 
@@ -2086,9 +2085,10 @@ bool Lexer::LexStringLiteral(Token &Result, unsigned CurOffset,
 
   // Update the location of the token as well as the BufferPtr instance var.
   const char *TokStart = BufferStart + BufferOffset;
-  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
+
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(TokStart, TokLen));
   return true;
 }
 
@@ -2167,9 +2167,9 @@ bool Lexer::LexRawStringLiteral(Token &Result, unsigned CurOffset,
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = &BufferStart[BufferOffset];
-  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(TokStart, TokLen));
   return true;
 }
 
@@ -2212,9 +2212,9 @@ bool Lexer::LexAngledStringLiteral(Token &Result, unsigned CurOffset) {
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = &BufferStart[BufferOffset];
-  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
   FormTokenWithChars(Result, CurOffset, tok::header_name);
-  Result.setLiteralData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(TokStart, TokLen));
   return true;
 }
 
@@ -2311,9 +2311,9 @@ bool Lexer::LexCharConstant(Token &Result, unsigned CurOffset,
 
   // Update the location of token as well as BufferPtr.
   const char *TokStart = BufferStart + BufferOffset;
-  GTokStrings.push_back(std::string(TokStart, CurOffset - BufferOffset));
+  unsigned TokLen = CurOffset - BufferOffset;
   FormTokenWithChars(Result, CurOffset, Kind);
-  Result.setLiteralData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(TokStart, TokLen));
   return true;
 }
 
@@ -3214,6 +3214,19 @@ static const char *findPlaceholderEnd(const char* CurPtr,
   return nullptr;
 }
 
+void Lexer::SetTokString(Token& Tok, StringRef Str) {
+  const char* DestPtr = Str.data();
+  if (GrowBuffer) {
+    assert(PP);
+    PP->CreateString(Str, Tok);
+  }
+
+  if (Tok.is(tok::raw_identifier))
+    Tok.setRawIdentifierData(DestPtr);
+  else
+    Tok.setLiteralData(DestPtr);
+}
+
 bool Lexer::lexEditorPlaceholder(Token &Result, unsigned CurOffset) {
   assert(BufferStart[CurOffset-1] == '<' && BufferStart[CurOffset] == '#' && "Not a placeholder!");
   if (!PP || !PP->getPreprocessorOpts().LexEditorPlaceholders || LexingRawMode)
@@ -3224,12 +3237,12 @@ bool Lexer::lexEditorPlaceholder(Token &Result, unsigned CurOffset) {
   if (!End)
     return false;
   const char *Start = BufferStart + CurOffset - 1;
+  unsigned TokLen = End-Start;
   if (!LangOpts.AllowEditorPlaceholders)
     Diag(CurOffset - 1, diag::err_placeholder_in_source);
   Result.startToken();
-  GTokStrings.push_back(std::string(Start, End - Start));
   FormTokenWithChars(Result, End - BufferStart, tok::raw_identifier);
-  Result.setRawIdentifierData(GTokStrings.back().data());
+  SetTokString(Result, StringRef(Start, TokLen));
   PP->LookUpIdentifierInfo(Result);
   Result.setFlag(Token::IsEditorPlaceholder);
   BufferOffset = End - BufferStart;
@@ -4364,14 +4377,13 @@ HandleDirective:
 const char *Lexer::convertDependencyDirectiveToken(
     const dependency_directives_scan::Token &DDTok, Token &Result) {
   const char *TokPtr = BufferStart + DDTok.Offset;
-  GTokStrings.push_back(std::string(TokPtr, DDTok.Length));
   Result.startToken();
   Result.setLocation(getSourceLocation(TokPtr-BufferStart));
   Result.setKind(DDTok.Kind);
   Result.setFlag((Token::TokenFlags)DDTok.Flags);
   Result.setLength(DDTok.Length);
   BufferOffset = TokPtr + DDTok.Length - BufferStart;
-  return GTokStrings.back().data();
+  return TokPtr;
 }
 
 bool Lexer::LexDependencyDirectiveToken(Token &Result) {
@@ -4411,7 +4423,7 @@ bool Lexer::LexDependencyDirectiveToken(Token &Result) {
     return true;
   }
   if (Result.isLiteral()) {
-    Result.setLiteralData(TokPtr);
+    SetTokString(Result, StringRef(TokPtr, Result.getLength()));
     return true;
   }
   if (Result.is(tok::colon) &&
