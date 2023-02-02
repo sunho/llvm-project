@@ -124,7 +124,7 @@ int main(int argc, const char **argv) {
         continue;
       }
 
-      if (auto Err = Interp->ParseAndExecute(*Line)) {
+      if (auto Err = Interp->ParseAndExecute(*Line, [&]() { return LE.readLine(); })) {
         llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
         HasError = true;
       }
