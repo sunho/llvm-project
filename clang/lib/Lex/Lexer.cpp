@@ -133,11 +133,12 @@ void Lexer::InitLexer(const char *BufStart, unsigned BufOffset,
 /// assumes that the associated file buffer and Preprocessor objects will
 /// outlive it, so it doesn't take ownership of either of them.
 Lexer::Lexer(FileID FID, const llvm::MemoryBufferRef &InputFile,
-             Preprocessor &PP, bool IsFirstIncludeOfFile)
+             Preprocessor &PP, bool IsFirstIncludeOfFile, GrowBufferCallback GrowBuffer)
     : PreprocessorLexer(&PP, FID),
       FileLoc(PP.getSourceManager().getLocForStartOfFile(FID)),
       LangOpts(PP.getLangOpts()), LineComment(LangOpts.LineComment),
-      IsFirstTimeLexingFile(IsFirstIncludeOfFile) {
+      IsFirstTimeLexingFile(IsFirstIncludeOfFile), 
+      GrowBuffer(std::move(GrowBuffer)) {
   InitLexer(InputFile.getBufferStart(), 0,
             InputFile.getBufferSize());
 
@@ -442,6 +443,19 @@ unsigned Lexer::getSpelling(const Token &Tok, const char *&Buffer,
 
   // Otherwise, hard case, relex the characters into the string.
   return getSpellingSlow(Tok, TokStart, LangOpts, const_cast<char*>(Buffer));
+}
+
+ bool Lexer::TryExpandBuffer() {
+  if (!GrowBuffer)
+    return false;
+  
+  auto NewBuffer = GrowBuffer();
+  if (!NewBuffer)
+    return false;
+
+  BufferStart = NewBuffer->getBufferStart();
+  BufferSize = NewBuffer->getBufferSize();
+  return true;
 }
 
 /// MeasureTokenLength - Relex the token at the specified location and return
@@ -1361,6 +1375,9 @@ Slash:
       // Found backslash<whitespace><newline>.  Parse the char after it.
       Size += EscapedNewLineSize;
       Offset  += EscapedNewLineSize;
+
+      if (BufferStart[Offset] == 0 && Offset == BufferSize) 
+        TryExpandBuffer();
 
       // Use slow version to accumulate a correct size field.
       return getCharAndSizeSlow(Offset, Size, Tok);
@@ -2320,7 +2337,7 @@ bool Lexer::LexCharConstant(Token &Result, unsigned CurOffset,
       C = getAndAdvanceChar(CurOffset, Result);
 
     if (C == '\n' || C == '\r' ||             // Newline.
-        (C == 0 && CurOffset-1 == BufferSize)) {  // End of file.
+        (C == 0 && CurOffset-1 == BufferSize && !TryExpandBuffer())) {  // End of file.
       if (!isLexingRawMode() && !LangOpts.AsmPreprocessor)
         Diag(BufferOffset, diag::ext_unterminated_char_or_string) << 0;
       FormTokenWithChars(Result, CurOffset-1, tok::unknown);
@@ -2380,6 +2397,11 @@ bool Lexer::SkipWhitespace(Token &Result, unsigned CurOffset,
     // Skip horizontal whitespace very aggressively.
     while (isHorizontalWhitespace(Char))
       Char = BufferStart[++CurOffset];
+
+    if (Char == 0 && CurOffset == BufferSize+1 && TryExpandBuffer()) {
+      --CurOffset;
+      continue;
+    }
 
     // Otherwise if we have something other than whitespace, we're done.
     if (!isVerticalWhitespace(Char))
@@ -2465,10 +2487,14 @@ bool Lexer::SkipLineComment(Token &Result, unsigned CurOffset,
   while (true) {
     C = BufferStart[CurOffset];
     // Skip over characters in the fast loop.
-    while (isASCII(C) && C != 0 &&   // Potentially EOF.
-           C != '\n' && C != '\r') { // Newline or DOS-style newline.
-      C = BufferStart[++CurOffset];
-      UnicodeDecodingAlreadyDiagnosed = false;
+    while (true) {
+      while (isASCII(C) && C != 0 &&   // Potentially EOF.
+            C != '\n' && C != '\r') { // Newline or DOS-style newline.
+        C = BufferStart[++CurOffset];
+        UnicodeDecodingAlreadyDiagnosed = false;
+      }
+      if (C != 0 || CurOffset != BufferSize + 1 || !TryExpandBuffer()) break;
+      C = BufferStart[CurOffset];
     }
 
     if (!isASCII(C)) {
@@ -2551,7 +2577,15 @@ bool Lexer::SkipLineComment(Token &Result, unsigned CurOffset,
         }
     }
 
-    if (C == '\r' || C == '\n' || CurOffset == BufferSize + 1) {
+    if (CurOffset == BufferSize + 1) {
+      if (!TryExpandBuffer()) {
+        --CurOffset;
+        break;
+      }
+      continue;
+    }
+
+    if (C == '\r' || C == '\n') {
       --CurOffset;
       break;
     }
@@ -2730,7 +2764,7 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
   unsigned CharSize;
   unsigned char C = getCharAndSize(CurOffset, CharSize);
   CurOffset += CharSize;
-  if (C == 0 && CurOffset == BufferSize+1) {
+  if (C == 0 && CurOffset == BufferSize+1 && !TryExpandBuffer()) {
     if (!isLexingRawMode())
       Diag(BufferOffset, diag::err_unterminated_block_comment);
     --CurOffset;
@@ -2758,6 +2792,9 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
   bool UnicodeDecodingAlreadyDiagnosed = false;
 
   while (true) {
+    if (CurOffset + 24 >= BufferSize) {
+      TryExpandBuffer();
+    }
     // Skip over all non-interesting characters until we find end of buffer or a
     // (probably ending) '/' character.
     if (CurOffset + 24 < BufferSize &&
@@ -2876,6 +2913,9 @@ bool Lexer::SkipBlockComment(Token &Result, unsigned CurOffset,
         if (!isLexingRawMode())
           Diag(CurOffset-1, diag::warn_nested_block_comment);
       }
+    } else if (C == 0 && CurOffset == BufferSize+1 && TryExpandBuffer()) {
+      --CurOffset;
+      continue;
     } else if (C == 0 && CurOffset == BufferSize+1) {
       if (!isLexingRawMode())
         Diag(BufferOffset, diag::err_unterminated_block_comment);
@@ -2954,7 +2994,7 @@ void Lexer::ReadToEndOfLine(SmallVectorImpl<char> *Result) {
       break;
     case 0:  // Null.
       // Found end of file?
-      if (CurOffset-1 != BufferSize) {
+      if (CurOffset-1 != BufferSize && !TryExpandBuffer()) {
         if (isCodeCompletionPoint(CurOffset-1)) {
           PP->CodeCompleteNaturalLanguage();
           cutOffLexing();
@@ -3233,6 +3273,8 @@ bool Lexer::lexEditorPlaceholder(Token &Result, unsigned CurOffset) {
   assert(BufferStart[CurOffset-1] == '<' && BufferStart[CurOffset] == '#' && "Not a placeholder!");
   if (!PP || !PP->getPreprocessorOpts().LexEditorPlaceholders || LexingRawMode)
     return false;
+  if (CurOffset + 1 == BufferSize) 
+    TryExpandBuffer();
   const char *End = findPlaceholderEnd(BufferStart + CurOffset + 1, BufferStart + BufferSize);
   if (!End)
     return false;
@@ -3590,8 +3632,10 @@ LexStart:
   // Small amounts of horizontal whitespace is very common between tokens.
   if (isHorizontalWhitespace(BufferStart[CurOffset])) {
     do {
-      ++CurOffset;
-    } while (isHorizontalWhitespace(BufferStart[CurOffset]));
+      do {
+        ++CurOffset;
+      } while (isHorizontalWhitespace(BufferStart[CurOffset]));
+    } while (BufferStart[CurOffset] == 0 && CurOffset == BufferSize && TryExpandBuffer());
 
     // If we are keeping whitespace and other tokens, just return what we just
     // skipped.  The next lexer invocation will return the token after the
@@ -3618,8 +3662,12 @@ LexStart:
   switch (Char) {
   case 0:  // Null.
     // Found end of file?
-    if (CurOffset-1 == BufferSize)
+    if (CurOffset-1 == BufferSize) {
+      if (TryExpandBuffer()) {
+        goto LexNextToken;
+      }
       return LexEndOfFile(Result, CurOffset-1);
+    }
 
     // Check if we are performing code completion.
     if (isCodeCompletionPoint(CurOffset-1)) {
