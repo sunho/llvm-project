@@ -1016,7 +1016,7 @@ private:
   /// excluded conditional directives. It maps the source buffer pointer at
   /// the beginning of a skipped block, to the number of bytes that should be
   /// skipped.
-  llvm::DenseMap<const char *, unsigned> RecordedSkippedRanges;
+  llvm::DenseMap<FileID, llvm::DenseMap<unsigned , unsigned>> RecordedSkippedRanges;
 
   void updateOutOfDateIdentifier(IdentifierInfo &II) const;
 
@@ -2122,7 +2122,7 @@ private:
                  *Ident___abnormal_termination,
                  *Ident_AbnormalTermination;
 
-  const char *getCurLexerEndPos();
+  unsigned getCurLexerEndPos();
   void diagnoseMissingHeaderInUmbrellaDir(const Module &Mod);
 
 public:

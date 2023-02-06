@@ -891,7 +891,7 @@ void Preprocessor::HandlePragmaHdrstop(Token &Tok) {
     assert(CurLexer && "no lexer for #pragma hdrstop processing");
     Token &Result = Tok;
     Result.startToken();
-    CurLexer->FormTokenWithChars(Result, CurLexer->BufferEnd, tok::eof);
+    CurLexer->FormTokenWithChars(Result, CurLexer->BufferSize, tok::eof);
     CurLexer->cutOffLexing();
   }
   if (usingPCHWithPragmaHdrStop())

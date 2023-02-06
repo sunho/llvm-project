@@ -495,38 +495,37 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
   struct SkippingRangeStateTy {
     Preprocessor &PP;
 
-    const char *BeginPtr = nullptr;
+    std::optional<unsigned> BeginOffset;
     unsigned *SkipRangePtr = nullptr;
 
     SkippingRangeStateTy(Preprocessor &PP) : PP(PP) {}
 
     void beginLexPass() {
-      if (BeginPtr)
+      if (BeginOffset)
         return; // continue skipping a block.
 
       // Initiate a skipping block and adjust the lexer if we already skipped it
       // before.
-      BeginPtr = PP.CurLexer->getBufferLocation();
-      SkipRangePtr = &PP.RecordedSkippedRanges[BeginPtr];
+      BeginOffset = PP.CurLexer->getCurrentBufferOffset();
+      SkipRangePtr = &PP.RecordedSkippedRanges[PP.CurLexer->getFileID()][*BeginOffset];
       if (*SkipRangePtr) {
         PP.CurLexer->seek(PP.CurLexer->getCurrentBufferOffset() + *SkipRangePtr,
                           /*IsAtStartOfLine*/ true);
       }
     }
 
-    void endLexPass(const char *Hashptr) {
-      if (!BeginPtr) {
+    void endLexPass(unsigned HashOffset) {
+      if (!BeginOffset) {
         // Not doing normal lexing.
         assert(PP.CurLexer->isDependencyDirectivesLexer());
         return;
       }
-
       // Finished skipping a block, record the range if it's first time visited.
       if (!*SkipRangePtr) {
-        *SkipRangePtr = Hashptr - BeginPtr;
+        *SkipRangePtr = HashOffset - *BeginOffset;
       }
-      assert(*SkipRangePtr == Hashptr - BeginPtr);
-      BeginPtr = nullptr;
+      assert(*SkipRangePtr == HashOffset - *BeginOffset);
+      BeginOffset = std::nullopt;
       SkipRangePtr = nullptr;
     }
   } SkippingRangeState(*this);
@@ -575,8 +574,8 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
     if (CurLexer) CurLexer->SetKeepWhitespaceMode(false);
 
     assert(Tok.is(tok::hash));
-    const char *Hashptr = CurLexer->getBufferLocation() - Tok.getLength();
-    assert(CurLexer->getSourceLocation(Hashptr) == Tok.getLocation());
+    unsigned HashOffset = CurLexer->getCurrentBufferOffset() - Tok.getLength();
+    assert(CurLexer->getSourceLocation(HashOffset) == Tok.getLocation());
 
     // Read the next token, the directive flavor.
     LexUnexpandedToken(Tok);
@@ -651,7 +650,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
 
         // If we popped the outermost skipping block, we're done skipping!
         if (!CondInfo.WasSkipping) {
-          SkippingRangeState.endLexPass(Hashptr);
+          SkippingRangeState.endLexPass(HashOffset);
           // Restore the value of LexingRawMode so that trailing comments
           // are handled correctly, if we've reached the outermost block.
           CurPPLexer->LexingRawMode = false;
@@ -670,7 +669,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
         PPConditionalInfo &CondInfo = CurPPLexer->peekConditionalLevel();
 
         if (!CondInfo.WasSkipping)
-          SkippingRangeState.endLexPass(Hashptr);
+          SkippingRangeState.endLexPass(HashOffset);
 
         // If this is a #else with a #else before it, report the error.
         if (CondInfo.FoundElse)
@@ -698,7 +697,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
         PPConditionalInfo &CondInfo = CurPPLexer->peekConditionalLevel();
 
         if (!CondInfo.WasSkipping)
-          SkippingRangeState.endLexPass(Hashptr);
+          SkippingRangeState.endLexPass(HashOffset);
 
         // If this is a #elif with a #else before it, report the error.
         if (CondInfo.FoundElse)
@@ -743,7 +742,7 @@ void Preprocessor::SkipExcludedConditionalBlock(SourceLocation HashTokenLoc,
         Token DirectiveToken = Tok;
 
         if (!CondInfo.WasSkipping)
-          SkippingRangeState.endLexPass(Hashptr);
+          SkippingRangeState.endLexPass(HashOffset);
 
         // Warn if using `#elifdef` & `#elifndef` in not C2x & C++2b mode even
         // if this branch is in a skipping block.
@@ -2287,7 +2286,7 @@ Preprocessor::ImportAction Preprocessor::HandleHeaderIncludeOrImport(
         Token &Result = IncludeTok;
         assert(CurLexer && "#include but no current lexer set!");
         Result.startToken();
-        CurLexer->FormTokenWithChars(Result, CurLexer->BufferEnd, tok::eof);
+        CurLexer->FormTokenWithChars(Result, CurLexer->BufferSize, tok::eof);
         CurLexer->cutOffLexing();
       }
       return {ImportAction::None};
