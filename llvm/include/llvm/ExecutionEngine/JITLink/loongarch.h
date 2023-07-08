@@ -288,7 +288,7 @@ inline ArrayRef<char> getStubBlockContent(LinkGraph &G) {
 /// The pointer block will have the following default values:
 ///   alignment: PointerSize
 ///   alignment-offset: 0
-inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
+inline Symbol &createAnonymousPointer_loongarch(LinkGraph &G, Section &PointerSection,
                                       Symbol *InitialTarget = nullptr,
                                       uint64_t InitialAddend = 0) {
   auto &B = G.createContentBlock(PointerSection, getGOTEntryBlockContent(G),
@@ -301,7 +301,7 @@ inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
 
 /// Create a jump stub that jumps via the pointer at the given symbol and
 /// an anonymous symbol pointing to it. Return the anonymous symbol.
-inline Symbol &createAnonymousPointerJumpStub(LinkGraph &G,
+inline Symbol &createAnonymousPointerJumpStub_loongarch(LinkGraph &G,
                                               Section &StubSection,
                                               Symbol &PointerSymbol) {
   Block &StubContentBlock = G.createContentBlock(
@@ -341,7 +341,7 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointer(G, getGOTSection(G), &Target);
+    return createAnonymousPointer_loongarch(G, getGOTSection(G), &Target);
   }
 
 private:
@@ -376,7 +376,7 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointerJumpStub(G, getStubsSection(G),
+    return createAnonymousPointerJumpStub_loongarch(G, getStubsSection(G),
                                           GOT.getEntryForTarget(G, Target));
   }
 
