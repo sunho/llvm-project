@@ -17,6 +17,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/Orc/OrcABISupport.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Memory.h"
@@ -54,6 +55,8 @@ class Symbol;
 } // namespace jitlink
 
 namespace orc {
+
+class ObjectLinkingLayer;
 
 /// Base class for pools of compiler re-entry trampolines.
 /// These trampolines are callable addresses that save all register state
@@ -309,6 +312,63 @@ private:
   virtual void anchor();
 };
 
+/// Base class for managing redirectable symbols in which a call 
+/// gets redirected to another symbol in runtime.
+class RedirectionManager {
+public:
+  /// Symbol name to symbol definition map.
+  using SymbolAddrMap = DenseMap<SymbolStringPtr, ExecutorSymbolDef>;
+
+  virtual ~RedirectionManager() = default;
+
+  /// Create redirectable symbols with given symbol names and initial desitnation symbols.
+  virtual Error createRedirectableSymbols(const SymbolAddrMap& InitialDests) = 0;
+
+  /// Create a single redirectable symbol with given symbol name and initial desitnation symbol.
+  virtual Error createRedirectableSymbol(SymbolStringPtr Symbol, ExecutorSymbolDef InitialDest) {
+    return createRedirectableSymbols({{ Symbol, InitialDest }});
+  }
+
+  /// Release redirectable symbols.
+  virtual Error releaseRedirectableSymbols(const SymbolNameVector& Symbols) = 0;
+
+  /// Release redirectable symbol.
+  virtual Error releaseRedirectableSymbol(SymbolStringPtr Symbol) {
+    return releaseRedirectableSymbols({ Symbol });
+  }
+
+  /// Change the redirection destination of given symbols to new destination symbols.
+  virtual Error redirect(const SymbolAddrMap& NewDests) = 0;
+
+  /// Change the redirection destination of given symbol to new destination symbol.
+  virtual Error redirect(SymbolStringPtr Symbol, ExecutorSymbolDef NewDest) {
+    return redirect({{ Symbol, NewDest }});
+  }
+private:
+  virtual void anchor();
+};
+
+class JITLinkRedirectionManager : public RedirectionManager {
+public:
+  static Expected<std::unique_ptr<JITLinkRedirectionManager>> Create(ExecutionSession& ES, ObjectLinkingLayer& ObjLinkingLayer, DataLayout DL) {
+    return std::unique_ptr<JITLinkRedirectionManager>(new JITLinkRedirectionManager(ES, ObjLinkingLayer, DL));
+  }
+
+  Error createRedirectableSymbols(const SymbolAddrMap& InitialDests) override;
+
+  Error releaseRedirectableSymbols(const SymbolNameVector& Symbols) override;
+
+  Error redirect(const SymbolAddrMap& NewDests) override;
+private:
+  JITLinkRedirectionManager(ExecutionSession& ES, ObjectLinkingLayer& ObjLinkingLayer) :
+    ES(ES), ObjLinkingLayer(ObjLinkingLayer) {}
+
+
+  ExecutionSession& ES;
+  ObjectLinkingLayer& ObjLinkingLayer;
+  DataLayout DL;
+};
+
 template <typename ORCABI> class LocalIndirectStubsInfo {
 public:
   LocalIndirectStubsInfo(unsigned NumStubs, sys::OwningMemoryBlock StubsMem)
@@ -332,7 +392,7 @@ public:
       return errorCodeToError(EC);
 
     sys::MemoryBlock StubsBlock(StubsAndPtrsMem.base(), ISAS.StubBytes);
-    auto StubsBlockMem = static_cast<char *>(StubsAndPtrsMem.base());
+    auto *StubsBlockMem = static_cast<char *>(StubsAndPtrsMem.base());
     auto PtrBlockAddress =
         ExecutorAddr::fromPtr(StubsBlockMem) + ISAS.StubBytes;
 
@@ -588,6 +648,27 @@ Error addFunctionPointerRelocationsToCurrentSymbol(jitlink::Symbol &Sym,
                                                    jitlink::LinkGraph &G,
                                                    MCDisassembler &Disassembler,
                                                    MCInstrAnalysis &MIA);
+
+class JITLinkIndirectStubsPool {
+public:
+
+private:
+
+  constexpr static const char* STUB_PREFIX = "$__JITLINK_INDIRECT_STUBS_";
+
+  ExecutionSession& ES;
+  ObjectLinkingLayer& ObjLinkingLayer;
+  DataLayout DL;
+  std::mutex M;
+
+};
+
+struct IndirectStub {
+  ExecutorAddr PointerAddr;
+  ExecutorSymbolDef JumpStubSymbol;
+};
+
+Expected<std::vector<IndirectStub>> createIndirectStubs(ExecutionSession& ES, ObjectLinkingLayer& ObjLinkingLayer, DataLayout DL, JITDylib& JD, size_t N);
 
 } // end namespace orc
 

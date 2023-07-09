@@ -8,8 +8,11 @@
 
 #include "llvm/ExecutionEngine/Orc/IndirectionUtils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ExecutionEngine/JITLink/JITLink.h"
+#include "llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h"
 #include "llvm/ExecutionEngine/JITLink/x86_64.h"
 #include "llvm/ExecutionEngine/Orc/OrcABISupport.h"
+#include "llvm/ExecutionEngine/Orc/Shared/MemoryFlags.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInstrAnalysis.h"
@@ -61,6 +64,44 @@ namespace orc {
 
 TrampolinePool::~TrampolinePool() = default;
 void IndirectStubsManager::anchor() {}
+
+void RedirectionManager::anchor() {}
+
+Error JITLinkRedirectionManager::createRedirectableSymbols(JITDylib& JD, const SymbolAddrMap& InitialDests) {
+  return Error::success();
+}
+
+
+Error JITLinkRedirectionManager::releaseRedirectableSymbols(JITDylib& JD, const SymbolNameVector& Symbols) {
+  return Error::success();
+}
+
+Error JITLinkRedirectionManager::redirect(JITDylib& JD, const SymbolAddrMap& NewDests) {
+  return Error::success();
+}
+
+Expected<std::vector<IndirectStub>> createIndirectStubs(ExecutionSession& ES, ObjectLinkingLayer& ObjLinkingLayer, DataLayout DL, JITDylib& JD, size_t N) {
+  Triple TT = ES.getTargetTriple();
+  auto G = std::make_unique<jitlink::LinkGraph>(
+      "<INDIRECT STUBS>", TT, DL.getPointerSize(), DL.isBigEndian() ? support::big : support::little,
+      jitlink::getGenericEdgeKindName);
+  auto& PointerSection = G->createSection("$__INDIRECT_STUBS_GOT", MemProt::Write | MemProt::Read);
+  auto& StubsSection = G->createSection("$__INDIRECT_STUBS_PLT", MemProt::Exec | MemProt::Read);
+  std::vector<jitlink::Symbol*> PointerSymbols;
+  std::vector<jitlink::Symbol*> JumpStubSymbols;
+  for (size_t i = 0; i < N; i++){
+    auto Pointer = jitlink::createAnonymousPointer(*G, PointerSection);
+    if (auto Err = Pointer.takeError()) 
+      return Err;
+    PointerSymbols.push_back(&*Pointer);
+    auto Stub = jitlink::createAnonymousPointerJumpStub(*G, StubsSection, *Pointer);
+    if (auto Err = Stub.takeError())
+      return Err;
+    JumpStubSymbols.push_back(&*Stub);
+  }
+
+  G.
+}
 
 Expected<ExecutorAddr>
 JITCompileCallbackManager::getCompileCallback(CompileFunction Compile) {
