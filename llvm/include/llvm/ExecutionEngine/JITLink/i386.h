@@ -312,9 +312,10 @@ extern const char PointerJumpStubContent[6];
 ///   alignment: 32-bit
 ///   alignment-offset: 0
 ///   address: highest allowable (~7U)
-inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
-                                      Symbol *InitialTarget = nullptr,
-                                      uint64_t InitialAddend = 0) {
+inline Symbol &createAnonymousPointer_i386(LinkGraph &G,
+                                           Section &PointerSection,
+                                           Symbol *InitialTarget = nullptr,
+                                           uint64_t InitialAddend = 0) {
   auto &B = G.createContentBlock(PointerSection, NullPointerContent,
                                  orc::ExecutorAddr(), 8, 0);
   if (InitialTarget)
@@ -328,8 +329,9 @@ inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
 ///   alignment: 8-bit
 ///   alignment-offset: 0
 ///   address: highest allowable: (~5U)
-inline Block &createPointerJumpStubBlock(LinkGraph &G, Section &StubSection,
-                                         Symbol &PointerSymbol) {
+inline Block &createPointerJumpStubBlock_i386(LinkGraph &G,
+                                              Section &StubSection,
+                                              Symbol &PointerSymbol) {
   auto &B = G.createContentBlock(StubSection, PointerJumpStubContent,
                                  orc::ExecutorAddr(), 8, 0);
   B.addEdge(Pointer32,
@@ -344,12 +346,12 @@ inline Block &createPointerJumpStubBlock(LinkGraph &G, Section &StubSection,
 /// an anonymous symbol pointing to it. Return the anonymous symbol.
 ///
 /// The stub block will be created by createPointerJumpStubBlock.
-inline Symbol &createAnonymousPointerJumpStub(LinkGraph &G,
-                                              Section &StubSection,
-                                              Symbol &PointerSymbol) {
+inline Symbol &createAnonymousPointerJumpStub_i386(LinkGraph &G,
+                                                   Section &StubSection,
+                                                   Symbol &PointerSymbol) {
   return G.addAnonymousSymbol(
-      createPointerJumpStubBlock(G, StubSection, PointerSymbol), 0, 6, true,
-      false);
+      createPointerJumpStubBlock_i386(G, StubSection, PointerSymbol), 0, 6,
+      true, false);
 }
 
 /// Global Offset Table Builder.
@@ -385,7 +387,7 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointer(G, getGOTSection(G), &Target);
+    return createAnonymousPointer_i386(G, getGOTSection(G), &Target);
   }
 
 private:
@@ -422,8 +424,8 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointerJumpStub(G, getStubsSection(G),
-                                          GOT.getEntryForTarget(G, Target));
+    return createAnonymousPointerJumpStub_i386(
+        G, getStubsSection(G), GOT.getEntryForTarget(G, Target));
   }
 
 public:

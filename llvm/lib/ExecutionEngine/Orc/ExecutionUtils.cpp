@@ -553,7 +553,7 @@ DLLImportDefinitionGenerator::getTargetEndianness(const Triple &TT) {
 Expected<std::unique_ptr<jitlink::LinkGraph>>
 DLLImportDefinitionGenerator::createStubsGraph(const SymbolMap &Resolved) {
   Triple TT = ES.getTargetTriple();
-  auto PointerSize = getTargetEndianness(TT);
+  auto PointerSize = getTargetPointerSize(TT);
   if (!PointerSize)
     return PointerSize.takeError();
   auto Endianness = getTargetEndianness(TT);
@@ -573,7 +573,7 @@ DLLImportDefinitionGenerator::createStubsGraph(const SymbolMap &Resolved) {
 
     // Create __imp_ symbol
     jitlink::Symbol &Ptr =
-        jitlink::x86_64::createAnonymousPointer(*G, Sec, &Target);
+        jitlink::x86_64::createAnonymousPointer_x86_64(*G, Sec, &Target);
     auto NameCopy = G->allocateContent(Twine(getImpPrefix()) + *KV.first);
     StringRef NameCopyRef = StringRef(NameCopy.data(), NameCopy.size());
     Ptr.setName(NameCopyRef);
@@ -583,7 +583,7 @@ DLLImportDefinitionGenerator::createStubsGraph(const SymbolMap &Resolved) {
     // Create PLT stub
     // FIXME: check PLT stub of data symbol is not accessed
     jitlink::Block &StubBlock =
-        jitlink::x86_64::createPointerJumpStubBlock(*G, Sec, Ptr);
+        jitlink::x86_64::createPointerJumpStubBlock_x86_64(*G, Sec, Ptr);
     G->addDefinedSymbol(StubBlock, 0, *KV.first, StubBlock.getSize(),
                         jitlink::Linkage::Strong, jitlink::Scope::Default, true,
                         false);

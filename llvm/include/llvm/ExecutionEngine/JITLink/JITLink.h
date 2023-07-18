@@ -1852,6 +1852,25 @@ Error makeTargetOutOfRangeError(const LinkGraph &G, const Block &B,
 Error makeAlignmentError(llvm::orc::ExecutorAddr Loc, uint64_t Value, int N,
                          const Edge &E);
 
+/// Creates a new pointer block in the given section and returns an
+/// Anonymous symobl pointing to it.
+///
+/// The pointer block will have the following default values:
+///   alignment: PointerSize
+///   alignment-offset: 0
+///   address: highest allowable
+Expected<Symbol &> createAnonymousPointer(LinkGraph &G, Section &PointerSection,
+                                          Symbol *InitialTarget = nullptr,
+                                          uint64_t InitialAddend = 0);
+
+/// Create a jump stub that jumps via the pointer at the given symbol and
+/// an anonymous symbol pointing to it. Return the anonymous symbol.
+///
+/// The stub block will be created by createPointerJumpStubBlock.
+Expected<Symbol &> createAnonymousPointerJumpStub(LinkGraph &G,
+                                                  Section &StubSection,
+                                                  Symbol &PointerSymbol);
+
 /// Base case for edge-visitors where the visitor-list is empty.
 inline void visitEdge(LinkGraph &G, Block *B, Edge &E) {}
 

@@ -12,6 +12,10 @@
 #include "llvm/ExecutionEngine/JITLink/COFF.h"
 #include "llvm/ExecutionEngine/JITLink/ELF.h"
 #include "llvm/ExecutionEngine/JITLink/MachO.h"
+#include "llvm/ExecutionEngine/JITLink/aarch64.h"
+#include "llvm/ExecutionEngine/JITLink/i386.h"
+#include "llvm/ExecutionEngine/JITLink/loongarch.h"
+#include "llvm/ExecutionEngine/JITLink/x86_64.h"
 #include "llvm/Support/Format.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/raw_ostream.h"
@@ -414,6 +418,50 @@ Error makeAlignmentError(llvm::orc::ExecutorAddr Loc, uint64_t Value, int N,
                                   formatv("{0:d}", E.getKind()) + ": 0x" +
                                   llvm::utohexstr(Value) +
                                   " is not aligned to " + Twine(N) + " bytes");
+}
+
+Expected<Symbol &> createAnonymousPointer(LinkGraph &G, Section &PointerSection,
+                                          Symbol *InitialTarget,
+                                          uint64_t InitialAddend) {
+  switch (G.getTargetTriple().getArch()) {
+  case Triple::aarch64:
+    return aarch64::createAnonymousPointer_aarch64(
+        G, PointerSection, InitialTarget, InitialAddend);
+  case Triple::x86_64:
+    return x86_64::createAnonymousPointer_x86_64(G, PointerSection,
+                                                 InitialTarget, InitialAddend);
+  case Triple::x86:
+    return i386::createAnonymousPointer_i386(G, PointerSection, InitialTarget,
+                                             InitialAddend);
+  case Triple::loongarch32:
+  case Triple::loongarch64:
+    return loongarch::createAnonymousPointer_loongarch(
+        G, PointerSection, InitialTarget, InitialAddend);
+  default:
+    return make_error<JITLinkError>("Unsupported architecture");
+  }
+}
+
+Expected<Symbol &> createAnonymousPointerJumpStub(LinkGraph &G,
+                                                  Section &StubSection,
+                                                  Symbol &PointerSymbol) {
+  switch (G.getTargetTriple().getArch()) {
+  case Triple::aarch64:
+    return aarch64::createAnonymousPointerJumpStub_aarch64(G, StubSection,
+                                                           PointerSymbol);
+  case Triple::x86_64:
+    return x86_64::createAnonymousPointerJumpStub_x86_64(G, StubSection,
+                                                         PointerSymbol);
+  case Triple::x86:
+    return i386::createAnonymousPointerJumpStub_i386(G, StubSection,
+                                                     PointerSymbol);
+  case Triple::loongarch32:
+  case Triple::loongarch64:
+    return loongarch::createAnonymousPointerJumpStub_loongarch(G, StubSection,
+                                                               PointerSymbol);
+  default:
+    return make_error<JITLinkError>("Unsupported architecture");
+  }
 }
 
 Expected<std::unique_ptr<LinkGraph>>

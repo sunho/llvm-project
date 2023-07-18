@@ -594,9 +594,10 @@ extern const char PointerJumpStubContent[12];
 ///   alignment: 64-bit
 ///   alignment-offset: 0
 ///   address: highest allowable (~7U)
-inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
-                                      Symbol *InitialTarget = nullptr,
-                                      uint64_t InitialAddend = 0) {
+inline Symbol &createAnonymousPointer_aarch64(LinkGraph &G,
+                                              Section &PointerSection,
+                                              Symbol *InitialTarget = nullptr,
+                                              uint64_t InitialAddend = 0) {
   auto &B = G.createContentBlock(PointerSection, NullPointerContent,
                                  orc::ExecutorAddr(~uint64_t(7)), 8, 0);
   if (InitialTarget)
@@ -610,8 +611,9 @@ inline Symbol &createAnonymousPointer(LinkGraph &G, Section &PointerSection,
 ///   alignment: 32-bit
 ///   alignment-offset: 0
 ///   address: highest allowable: (~11U)
-inline Block &createPointerJumpStubBlock(LinkGraph &G, Section &StubSection,
-                                         Symbol &PointerSymbol) {
+inline Block &createPointerJumpStubBlock_aarch64(LinkGraph &G,
+                                                 Section &StubSection,
+                                                 Symbol &PointerSymbol) {
   auto &B = G.createContentBlock(StubSection, PointerJumpStubContent,
                                  orc::ExecutorAddr(~uint64_t(11)), 1, 0);
   B.addEdge(Page21, 0, PointerSymbol, 0);
@@ -622,12 +624,12 @@ inline Block &createPointerJumpStubBlock(LinkGraph &G, Section &StubSection,
 /// Create a jump stub that jumps via the pointer at the given symbol and
 /// an anonymous symbol pointing to it. Return the anonymous symbol.
 ///
-/// The stub block will be created by createPointerJumpStubBlock.
-inline Symbol &createAnonymousPointerJumpStub(LinkGraph &G,
-                                              Section &StubSection,
-                                              Symbol &PointerSymbol) {
+/// The stub block will be created by createPointerJumpStubBlock_aarch64.
+inline Symbol &createAnonymousPointerJumpStub_aarch64(LinkGraph &G,
+                                                      Section &StubSection,
+                                                      Symbol &PointerSymbol) {
   return G.addAnonymousSymbol(
-      createPointerJumpStubBlock(G, StubSection, PointerSymbol), 0,
+      createPointerJumpStubBlock_aarch64(G, StubSection, PointerSymbol), 0,
       sizeof(PointerJumpStubContent), true, false);
 }
 
@@ -678,7 +680,7 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointer(G, getGOTSection(G), &Target);
+    return createAnonymousPointer_aarch64(G, getGOTSection(G), &Target);
   }
 
 private:
@@ -713,8 +715,8 @@ public:
   }
 
   Symbol &createEntry(LinkGraph &G, Symbol &Target) {
-    return createAnonymousPointerJumpStub(G, getStubsSection(G),
-                                          GOT.getEntryForTarget(G, Target));
+    return createAnonymousPointerJumpStub_aarch64(
+        G, getStubsSection(G), GOT.getEntryForTarget(G, Target));
   }
 
 public:
