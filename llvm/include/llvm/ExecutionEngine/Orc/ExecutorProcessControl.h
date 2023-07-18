@@ -403,10 +403,30 @@ protected:
   StringMap<ExecutorAddr> BootstrapSymbols;
 };
 
+class InProcessMemoryAccess : public ExecutorProcessControl::MemoryAccess {
+public:
+  InProcessMemoryAccess() = default;
+  void writeUInt8sAsync(ArrayRef<tpctypes::UInt8Write> Ws,
+                        WriteResultFn OnWriteComplete) override;
+
+  void writeUInt16sAsync(ArrayRef<tpctypes::UInt16Write> Ws,
+                         WriteResultFn OnWriteComplete) override;
+
+  void writeUInt32sAsync(ArrayRef<tpctypes::UInt32Write> Ws,
+                         WriteResultFn OnWriteComplete) override;
+
+  void writeUInt64sAsync(ArrayRef<tpctypes::UInt64Write> Ws,
+                         WriteResultFn OnWriteComplete) override;
+
+  void writeBuffersAsync(ArrayRef<tpctypes::BufferWrite> Ws,
+                         WriteResultFn OnWriteComplete) override;
+};
+
 /// A ExecutorProcessControl instance that asserts if any of its methods are
 /// used. Suitable for use is unit tests, and by ORC clients who haven't moved
 /// to ExecutorProcessControl-based APIs yet.
-class UnsupportedExecutorProcessControl : public ExecutorProcessControl {
+class UnsupportedExecutorProcessControl : public ExecutorProcessControl,
+                                          private InProcessMemoryAccess {
 public:
   UnsupportedExecutorProcessControl(
       std::shared_ptr<SymbolStringPool> SSP = nullptr,
@@ -418,6 +438,7 @@ public:
                                : std::make_unique<InPlaceTaskDispatcher>()) {
     this->TargetTriple = Triple(TT);
     this->PageSize = PageSize;
+    this->MemAccess = this;
   }
 
   Expected<tpctypes::DylibHandle> loadDylib(const char *DylibPath) override {
@@ -452,9 +473,8 @@ public:
 };
 
 /// A ExecutorProcessControl implementation targeting the current process.
-class SelfExecutorProcessControl
-    : public ExecutorProcessControl,
-      private ExecutorProcessControl::MemoryAccess {
+class SelfExecutorProcessControl : public ExecutorProcessControl,
+                                   private InProcessMemoryAccess {
 public:
   SelfExecutorProcessControl(
       std::shared_ptr<SymbolStringPool> SSP, std::unique_ptr<TaskDispatcher> D,
@@ -490,21 +510,6 @@ public:
   Error disconnect() override;
 
 private:
-  void writeUInt8sAsync(ArrayRef<tpctypes::UInt8Write> Ws,
-                        WriteResultFn OnWriteComplete) override;
-
-  void writeUInt16sAsync(ArrayRef<tpctypes::UInt16Write> Ws,
-                         WriteResultFn OnWriteComplete) override;
-
-  void writeUInt32sAsync(ArrayRef<tpctypes::UInt32Write> Ws,
-                         WriteResultFn OnWriteComplete) override;
-
-  void writeUInt64sAsync(ArrayRef<tpctypes::UInt64Write> Ws,
-                         WriteResultFn OnWriteComplete) override;
-
-  void writeBuffersAsync(ArrayRef<tpctypes::BufferWrite> Ws,
-                         WriteResultFn OnWriteComplete) override;
-
   static shared::CWrapperFunctionResult
   jitDispatchViaWrapperFunctionManager(void *Ctx, const void *FnTag,
                                        const char *Data, size_t Size);

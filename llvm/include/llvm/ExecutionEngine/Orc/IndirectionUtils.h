@@ -13,14 +13,17 @@
 #ifndef LLVM_EXECUTIONENGINE_ORC_INDIRECTIONUTILS_H
 #define LLVM_EXECUTIONENGINE_ORC_INDIRECTIONUTILS_H
 
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ExecutionEngine/JITSymbol.h"
 #include "llvm/ExecutionEngine/Orc/Core.h"
+#include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/Orc/OrcABISupport.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/Memory.h"
 #include "llvm/Support/Process.h"
+#include "llvm/Support/StringSaver.h"
 #include "llvm/Transforms/Utils/ValueMapper.h"
 #include <algorithm>
 #include <cassert>
@@ -29,6 +32,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -54,6 +58,8 @@ class Symbol;
 } // namespace jitlink
 
 namespace orc {
+
+class ObjectLinkingLayer;
 
 /// Base class for pools of compiler re-entry trampolines.
 /// These trampolines are callable addresses that save all register state
@@ -309,6 +315,106 @@ private:
   virtual void anchor();
 };
 
+/// Base class for managing redirectable symbols in which a call
+/// gets redirected to another symbol in runtime.
+class RedirectionManager {
+public:
+  /// Symbol name to symbol definition map.
+  using SymbolAddrMap = DenseMap<SymbolStringPtr, ExecutorSymbolDef>;
+
+  virtual ~RedirectionManager() = default;
+
+  /// Create redirectable symbols with given symbol names and initial
+  /// desitnation symbols.
+  virtual Error
+  createRedirectableSymbols(const SymbolAddrMap &InitialDests) = 0;
+
+  /// Create a single redirectable symbol with given symbol name and initial
+  /// desitnation symbol.
+  virtual Error createRedirectableSymbol(SymbolStringPtr Symbol,
+                                         ExecutorSymbolDef InitialDest) {
+    return createRedirectableSymbols({{Symbol, InitialDest}});
+  }
+
+  /// Release redirectable symbols.
+  virtual Error releaseRedirectableSymbols(const SymbolNameSet &Symbols) = 0;
+
+  /// Release redirectable symbol.
+  virtual Error releaseRedirectableSymbol(SymbolStringPtr Symbol) {
+    return releaseRedirectableSymbols({Symbol});
+  }
+
+  /// Change the redirection destination of given symbols to new destination
+  /// symbols.
+  virtual Error redirect(const SymbolAddrMap &NewDests) = 0;
+
+  /// Change the redirection destination of given symbol to new destination
+  /// symbol.
+  virtual Error redirect(SymbolStringPtr Symbol, ExecutorSymbolDef NewDest) {
+    return redirect({{Symbol, NewDest}});
+  }
+
+private:
+  virtual void anchor();
+};
+
+class JITLinkRedirectionManager : public RedirectionManager {
+public:
+  /// Create redirection manager that uses JITLink based implementaion.
+  static Expected<std::unique_ptr<RedirectionManager>>
+  Create(ExecutionSession &ES, ObjectLinkingLayer &ObjLinkingLayer,
+         const DataLayout &DL, JITDylib &JD) {
+    return std::unique_ptr<RedirectionManager>(
+        new JITLinkRedirectionManager(ES, ObjLinkingLayer, DL, JD));
+  }
+
+  Error createRedirectableSymbols(const SymbolAddrMap &InitialDests) override;
+
+  Error releaseRedirectableSymbols(const SymbolNameSet &Symbols) override;
+
+  Error redirect(const SymbolAddrMap &NewDests) override;
+
+private:
+  using StubHandle = unsigned;
+  constexpr static unsigned StubBlockSize = 256;
+  constexpr static StringRef JumpStubPrefix = "$__IND_JUMP_STUBS";
+  constexpr static StringRef StubPtrPrefix = "$IND_JUMP_PTR_";
+  constexpr static StringRef JumpStubTableName = "$IND_JUMP_";
+  constexpr static StringRef StubPtrTableName = "$__IND_JUMP_PTRS";
+
+  JITLinkRedirectionManager(ExecutionSession &ES,
+                            ObjectLinkingLayer &ObjLinkingLayer,
+                            const DataLayout &DL, JITDylib &JD)
+      : ES(ES), ObjLinkingLayer(ObjLinkingLayer), JD(JD), DL(DL) {}
+
+  StringRef JumpStubSymbolName(unsigned I) {
+    return StringPool.save((JumpStubPrefix + Twine(I)).str());
+  }
+
+  StringRef StubPtrSymbolName(unsigned I) {
+    return StringPool.save((StubPtrPrefix + Twine(I)).str());
+  }
+
+  unsigned GetNumAvailableStubs() const { return AvailbleStubs.size(); }
+
+  Error redirectInner(const SymbolAddrMap &NewDests);
+  Error grow(unsigned Need);
+
+  ExecutionSession &ES;
+  ObjectLinkingLayer &ObjLinkingLayer;
+  JITDylib &JD;
+  const DataLayout DL;
+
+  std::vector<StubHandle> AvailbleStubs;
+  DenseMap<SymbolStringPtr, StubHandle> SymbolToStubs;
+  std::vector<ExecutorSymbolDef> JumpStubs;
+  std::vector<ExecutorSymbolDef> StubPointers;
+
+  BumpPtrAllocator BAlloc;
+  StringSaver StringPool{BAlloc};
+  std::mutex Mutex;
+};
+
 template <typename ORCABI> class LocalIndirectStubsInfo {
 public:
   LocalIndirectStubsInfo(unsigned NumStubs, sys::OwningMemoryBlock StubsMem)
@@ -332,7 +438,7 @@ public:
       return errorCodeToError(EC);
 
     sys::MemoryBlock StubsBlock(StubsAndPtrsMem.base(), ISAS.StubBytes);
-    auto StubsBlockMem = static_cast<char *>(StubsAndPtrsMem.base());
+    auto *StubsBlockMem = static_cast<char *>(StubsAndPtrsMem.base());
     auto PtrBlockAddress =
         ExecutorAddr::fromPtr(StubsBlockMem) + ISAS.StubBytes;
 
