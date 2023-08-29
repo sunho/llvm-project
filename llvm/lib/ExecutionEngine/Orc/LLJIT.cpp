@@ -16,6 +16,7 @@
 #include "llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h"
 #include "llvm/ExecutionEngine/Orc/EPCEHFrameRegistrar.h"
 #include "llvm/ExecutionEngine/Orc/ExecutorProcessControl.h"
+#include "llvm/ExecutionEngine/Orc/IRPartitionLayer.h"
 #include "llvm/ExecutionEngine/Orc/MachOPlatform.h"
 #include "llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h"
 #include "llvm/ExecutionEngine/Orc/ObjectTransformLayer.h"
@@ -1239,7 +1240,7 @@ Error LLLazyJIT::addLazyIRModule(JITDylib &JD, ThreadSafeModule TSM) {
           [&](Module &M) -> Error { return applyDataLayout(M); }))
     return Err;
 
-  return CODLayer->add(JD, std::move(TSM));
+  return IPLayer->add(JD, std::move(TSM));
 }
 
 LLLazyJIT::LLLazyJIT(LLLazyJITBuilderState &S, Error &Err) : LLJIT(S, Err) {
@@ -1283,8 +1284,14 @@ LLLazyJIT::LLLazyJIT(LLLazyJITBuilderState &S, Error &Err) : LLJIT(S, Err) {
   CODLayer = std::make_unique<CompileOnDemandLayer>(
       *ES, *InitHelperTransformLayer, *LCTMgr, std::move(ISMBuilder));
 
+  // Create the IR partition layer.
+  IPLayer = std::make_unique<IRPartitionLayer>(*ES, *CODLayer);
+
   if (S.NumCompileThreads > 0)
     CODLayer->setCloneToNewContextOnEmit(true);
+
+  if (S.NumCompileThreads > 0)
+    IPLayer->setCloneToNewContextOnEmit(true);
 }
 
 // In-process LLJIT uses eh-frame section wrappers via EPC, so we need to force

@@ -1311,12 +1311,19 @@ private:
       TrackerMRs;
 };
 
+
+class RuntimeCallback {
+public:
+  uint64_t getCallbackID();
+};
+
 /// Platforms set up standard symbols and mediate interactions between dynamic
 /// initializers (e.g. C++ static constructors) and ExecutionSession state.
 /// Note that Platforms do not automatically run initializers: clients are still
 /// responsible for doing this.
 class Platform {
 public:
+
   virtual ~Platform();
 
   /// This method will be called outside the session lock each time a JITDylib
@@ -1337,6 +1344,9 @@ public:
   /// This method will be called under the ExecutionSession lock when a
   /// ResourceTracker is removed.
   virtual Error notifyRemoving(ResourceTracker &RT) = 0;
+
+  
+  virtual Expected<std::unique_ptr<RuntimeCallback>> createRuntimeCallback() = 0;
 
   /// A utility function for looking up initializer symbols. Performs a blocking
   /// lookup for the given symbols in each of the given JITDylibs.
