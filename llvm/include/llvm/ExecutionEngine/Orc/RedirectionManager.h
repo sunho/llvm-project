@@ -10,6 +10,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#ifndef LLVM_EXECUTIONENGINE_ORC_REDIRECTIONMANAGER_H
+#define LLVM_EXECUTIONENGINE_ORC_REDIRECTIONMANAGER_H
+
 #include "llvm/ExecutionEngine/Orc/Core.h"
 
 namespace llvm {
@@ -42,37 +45,56 @@ private:
 /// gets redirected to another symbol in runtime.
 class RedirectableSymbolManager : public RedirectionManager {
 public:
-  /// Symbol name to symbol definition map.
-  using SymbolAddrMap = DenseMap<SymbolStringPtr, ExecutorSymbolDef>;
-
   /// Create redirectable symbols with given symbol names and initial
-  /// desitnation symbols.
-  virtual Error
+  /// desitnation symbol addresses.
+  Error
   createRedirectableSymbols(ResourceTrackerSP RT,
-                            const SymbolAddrMap &InitialDests) = 0;
+                            const SymbolMap& InitialDests);
 
   /// Create a single redirectable symbol with given symbol name and initial
-  /// desitnation symbol.
+  /// desitnation symbol address.
   Error createRedirectableSymbol(ResourceTrackerSP RT, SymbolStringPtr Symbol,
                                  ExecutorSymbolDef InitialDest) {
     return createRedirectableSymbols(RT, {{Symbol, InitialDest}});
   }
 
-  /// Create redirectable symbols with given symbol names and initial
-  /// desitnation symbols.
-  Error createRedirectableSymbols(JITDylib &JD,
-                                  const SymbolAddrMap &InitialDests) {
-    return createRedirectableSymbols(JD.getDefaultResourceTracker(),
-                                     InitialDests);
+  /// Emit redirectable symbol 
+  virtual void emitRedirectableSymbols(std::unique_ptr<MaterializationResponsibility> MR, 
+                                       const SymbolMap& InitialDests) = 0;
+};
+
+class RedirectableMaterializationUnit : public MaterializationUnit {
+public:
+  RedirectableMaterializationUnit(RedirectableSymbolManager& RM, const SymbolMap& InitialDests) : 
+    MaterializationUnit(convertToFlags(InitialDests)), RM(RM), InitialDests(InitialDests) {}
+
+  StringRef getName() const override {
+    return "RedirectableSymbolMaterializationUnit";
   }
 
-  /// Create a single redirectable symbol with given symbol name and initial
-  /// desitnation symbol.
-  Error createRedirectableSymbol(JITDylib &JD, SymbolStringPtr Symbol,
-                                 ExecutorSymbolDef InitialDest) {
-    return createRedirectableSymbols(JD, {{Symbol, InitialDest}});
+  void materialize(std::unique_ptr<MaterializationResponsibility> R) override {
+    RM.emitRedirectableSymbols(std::move(R), std::move(InitialDests));
   }
+
+  void discard(const JITDylib &JD, const SymbolStringPtr &Name) override {
+    InitialDests.erase(Name);
+  }
+private:
+  static MaterializationUnit::Interface convertToFlags(const SymbolMap& InitialDests) {
+    SymbolFlagsMap Flags;
+    for (auto [K, V] : InitialDests) {
+      Flags[K] = V.getFlags();
+    }
+    return MaterializationUnit::Interface(Flags, {});
+  }
+
+  RedirectableSymbolManager& RM;
+  SymbolMap InitialDests;
 };
+
+
 
 } // namespace orc
 } // namespace llvm
+
+#endif

@@ -14,3 +14,14 @@ using namespace llvm;
 using namespace llvm::orc;
 
 void RedirectionManager::anchor() {}
+
+Error
+RedirectableSymbolManager::createRedirectableSymbols(ResourceTrackerSP RT,
+                          const SymbolMap& InitialDests) {
+  auto &JD = RT->getJITDylib();
+
+  if (auto Err = JD.define(std::make_unique<RedirectableMaterializationUnit>(*this, InitialDests), RT))
+    return Err;
+  
+  return Error::success();
+}

@@ -79,7 +79,7 @@ TEST_F(JITLinkRedirectionManagerTest, BasicRedirectionOperation) {
 
   auto RedirectableSymbol = ES->intern("RedirectableTarget");
   EXPECT_THAT_ERROR((*RM)->createRedirectableSymbols(
-                        *JD, {{RedirectableSymbol, InitialTarget}}),
+                        JD->getDefaultResourceTracker(), {{RedirectableSymbol, InitialTarget}}),
                     Succeeded());
   auto RTDef = cantFail(ES->lookup({JD}, RedirectableSymbol));
 

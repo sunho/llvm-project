@@ -36,7 +36,7 @@ public:
     return std::move(RM);
   }
 
-  Error createRedirectableSymbols(ResourceTrackerSP RT,
+  void emitRedirectableSymbols(std::unique_ptr<MaterializationResponsibility> R, 
                                   const SymbolAddrMap &InitialDests) override;
 
   Error redirect(JITDylib &TargetJD, const SymbolAddrMap &NewDests) override;

@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/ExecutionEngine/Orc/JITLinkRedirectableSymbolManager.h"
 #include "llvm/ExecutionEngine/JITLink/EHFrameSupport.h"
 #include "llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h"
 #include "llvm/ExecutionEngine/Orc/COFFPlatform.h"
@@ -1280,12 +1281,23 @@ LLLazyJIT::LLLazyJIT(LLLazyJITBuilderState &S, Error &Err) : LLJIT(S, Err) {
     return;
   }
 
+  RSManager = cantFail(JITLinkRedirectableSymbolManager::Create(*ES, (ObjectLinkingLayer&)getObjLinkingLayer(), getMainJITDylib()));
+
+
+  // Create the IR partition layer.
+  ROLayer = std::make_unique<ReOptLayer>(*ES, *InitHelperTransformLayer, *RSManager);
+
   // Create the COD layer.
   CODLayer = std::make_unique<CompileOnDemandLayer>(
-      *ES, *InitHelperTransformLayer, *LCTMgr, std::move(ISMBuilder));
+      *ES, *ROLayer, *LCTMgr, std::move(ISMBuilder));
 
   // Create the IR partition layer.
   IPLayer = std::make_unique<IRPartitionLayer>(*ES, *CODLayer);
+
+  if (auto Err2 = ROLayer->reigsterRuntimeFunctions(*getPlatformJITDylib())) {
+    Err = std::move(Err2);
+      return;
+  }
 
   if (S.NumCompileThreads > 0)
     CODLayer->setCloneToNewContextOnEmit(true);

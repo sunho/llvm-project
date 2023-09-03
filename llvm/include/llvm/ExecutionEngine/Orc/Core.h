@@ -1345,9 +1345,6 @@ public:
   /// ResourceTracker is removed.
   virtual Error notifyRemoving(ResourceTracker &RT) = 0;
 
-  
-  virtual Expected<std::unique_ptr<RuntimeCallback>> createRuntimeCallback() = 0;
-
   /// A utility function for looking up initializer symbols. Performs a blocking
   /// lookup for the given symbols in each of the given JITDylibs.
   ///

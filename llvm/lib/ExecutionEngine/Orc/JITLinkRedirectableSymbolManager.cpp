@@ -14,42 +14,57 @@
 using namespace llvm;
 using namespace llvm::orc;
 
-Error JITLinkRedirectableSymbolManager::createRedirectableSymbols(
-    ResourceTrackerSP RT, const SymbolAddrMap &InitialDests) {
+void JITLinkRedirectableSymbolManager::emitRedirectableSymbols(std::unique_ptr<MaterializationResponsibility> R, 
+                                  const SymbolAddrMap &InitialDests) {
   std::unique_lock<std::mutex> Lock(Mutex);
   if (GetNumAvailableStubs() < InitialDests.size())
-    if (auto Err = grow(InitialDests.size() - GetNumAvailableStubs()))
-      return Err;
+    if (auto Err = grow(InitialDests.size() - GetNumAvailableStubs())) {
+      ES.reportError(std::move(Err));
+      R->failMaterialization();
+      return;
+    }
 
-  JITDylib &TargetJD = RT->getJITDylib();
+  JITDylib &TargetJD = R->getTargetJITDylib();
   SymbolMap NewSymbolDefs;
   std::vector<SymbolStringPtr> Symbols;
   for (auto &[K, V] : InitialDests) {
     StubHandle StubID = AvailableStubs.back();
-    if (SymbolToStubs[&TargetJD].count(K))
-      return make_error<StringError>(
+    if (SymbolToStubs[&TargetJD].count(K)) {
+      ES.reportError(make_error<StringError>(
           "Tried to create duplicate redirectable symbols",
-          inconvertibleErrorCode());
+          inconvertibleErrorCode()));
+      R->failMaterialization();
+      return;
+    }
+    dbgs() << *K << "\n";
     SymbolToStubs[&TargetJD][K] = StubID;
     NewSymbolDefs[K] = JumpStubs[StubID];
+    NewSymbolDefs[K].setFlags(V.getFlags());
     Symbols.push_back(K);
     AvailableStubs.pop_back();
   }
 
-  if (auto Err = TargetJD.define(absoluteSymbols(NewSymbolDefs), RT))
-    return Err;
+  if (auto Err = R->replace(absoluteSymbols(NewSymbolDefs))) {
+    ES.reportError(std::move(Err));
+    R->failMaterialization();
+    return;
+  }
 
-  if (auto Err = redirectInner(TargetJD, InitialDests))
-    return Err;
+  if (auto Err = redirectInner(TargetJD, InitialDests)) {
+    ES.reportError(std::move(Err));
+    R->failMaterialization();
+    return;
+  }
 
-  auto Err = RT->withResourceKeyDo([&](ResourceKey Key) {
+  auto Err = R->withResourceKeyDo([&](ResourceKey Key) {
     TrackedResources[Key].insert(TrackedResources[Key].end(), Symbols.begin(),
                                  Symbols.end());
   });
-  if (Err)
-    return Err;
-
-  return Error::success();
+  if (Err) {
+    ES.reportError(std::move(Err));
+    R->failMaterialization();
+    return;
+  }
 }
 
 Error JITLinkRedirectableSymbolManager::redirect(
@@ -60,7 +75,7 @@ Error JITLinkRedirectableSymbolManager::redirect(
 
 Error JITLinkRedirectableSymbolManager::redirectInner(
     JITDylib &TargetJD, const SymbolAddrMap &NewDests) {
-  std::vector<std::pair<ExecutorAddr, ExecutorAddr>> PtrWrites;
+  std::vector<tpctypes::PointerWrite> PtrWrites;
   for (auto &[K, V] : NewDests) {
     if (!SymbolToStubs[&TargetJD].count(K))
       return make_error<StringError>(
@@ -69,25 +84,10 @@ Error JITLinkRedirectableSymbolManager::redirectInner(
     StubHandle StubID = SymbolToStubs[&TargetJD].at(K);
     PtrWrites.push_back({StubPointers[StubID].getAddress(), V.getAddress()});
   }
-
-  if (ES.getTargetTriple().isArch64Bit()) {
-    std::vector<tpctypes::UInt64Write> NativeWrites;
-    for (auto &[Ptr, Target] : PtrWrites)
-      NativeWrites.push_back(tpctypes::UInt64Write(Ptr, Target.getValue()));
-    if (auto Err =
-            ES.getExecutorProcessControl().getMemoryAccess().writeUInt64s(
-                NativeWrites))
-      return Err;
-  } else {
-    assert(DL.getPointerSize() == 4 && "Unsupported pointer size");
-    std::vector<tpctypes::UInt32Write> NativeWrites;
-    for (auto &[Ptr, Target] : PtrWrites)
-      NativeWrites.push_back(tpctypes::UInt32Write(Ptr, Target.getValue()));
-    if (auto Err =
-            ES.getExecutorProcessControl().getMemoryAccess().writeUInt32s(
-                NativeWrites))
-      return Err;
-  }
+  if (auto Err =
+          ES.getExecutorProcessControl().getMemoryAccess().writePointers(
+              PtrWrites))
+    return Err;
   return Error::success();
 }
 
