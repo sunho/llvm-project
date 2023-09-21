@@ -14,7 +14,6 @@
 #define LLVM_EXECUTIONENGINE_ORC_LLJIT_H
 
 #include "llvm/ExecutionEngine/Orc/CompileOnDemandLayer.h"
-#include "llvm/ExecutionEngine/Orc/ReOptLayer.h"
 #include "llvm/ExecutionEngine/Orc/CompileUtils.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/IRCompileLayer.h"
@@ -296,8 +295,6 @@ private:
   std::unique_ptr<LazyCallThroughManager> LCTMgr;
   std::unique_ptr<IRPartitionLayer> IPLayer;
   std::unique_ptr<CompileOnDemandLayer> CODLayer;
-  std::unique_ptr<ReOptLayer> ROLayer;
-  std::unique_ptr<RedirectableSymbolManager> RSManager;
 };
 
 class LLJITBuilderState {
