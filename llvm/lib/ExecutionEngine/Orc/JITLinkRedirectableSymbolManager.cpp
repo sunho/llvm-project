@@ -37,7 +37,6 @@ void JITLinkRedirectableSymbolManager::emitRedirectableSymbols(
       R->failMaterialization();
       return;
     }
-    dbgs() << *K << "\n";
     SymbolToStubs[&TargetJD][K] = StubID;
     NewSymbolDefs[K] = JumpStubs[StubID];
     NewSymbolDefs[K].setFlags(V.getFlags());
@@ -177,3 +176,42 @@ void JITLinkRedirectableSymbolManager::handleTransferResources(
                                 TrackedResources[SrcK].end());
   TrackedResources.erase(SrcK);
 }
+
+void RewriteRedirectableSymbolManager::emitRedirectableSymbols(
+    std::unique_ptr<MaterializationResponsibility> R,
+    const SymbolAddrMap &InitialDests) {
+  SymbolMap NewSymbolDefs;
+  std::vector<SymbolStringPtr> Symbols;
+  for (auto &[K, V] : InitialDests) {
+    NewSymbolDefs[K] = V;
+    NewSymbolDefs[K].setFlags(V.getFlags());
+    Redirected[K] = V.getAddress();
+  }
+
+  Base->emitRedirectableSymbols(std::move(R), InitialDests);
+}
+
+Error RewriteRedirectableSymbolManager::redirect(
+    JITDylib &TargetJD, const SymbolAddrMap &NewDests) {
+  if (auto Err = Base->redirect(TargetJD, NewDests)) {
+    return Err;
+  }
+  for (auto [Sym, Dest] : NewDests) {
+    Redirected[Sym] = Dest.getAddress();
+    for (auto P : Addresses[Sym]) {
+      auto [Addr, Addend] = P;
+      auto Target = Redirected[Sym];
+      int64_t Value =
+          Target - (Addr + 4) + Addend;
+      if (LLVM_LIKELY(isInt<32>(Value)))
+        *(support::little32_t *)Addr.getValue() = Value;
+      else
+        assert(false);
+      sys::Memory::InvalidateInstructionCache((void*)Addr.getValue(), 1024);
+    }
+  }
+
+  return Error::success();
+}
+
+

@@ -354,7 +354,7 @@ template <typename ELFT> Error ELFLinkGraphBuilder<ELFT>::graphifySections() {
     });
 
     // Get the section's memory protection flags.
-    orc::MemProt Prot = orc::MemProt::Read;
+    orc::MemProt Prot = orc::MemProt::Read | orc::MemProt::Write;
     if (Sec.sh_flags & ELF::SHF_EXECINSTR)
       Prot |= orc::MemProt::Exec;
     if (Sec.sh_flags & ELF::SHF_WRITE)

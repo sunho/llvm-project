@@ -20,6 +20,8 @@
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
 #include "llvm/Transforms/Utils/Cloning.h"
 
+extern uint64_t CallCountThreshold; 
+
 namespace llvm {
 namespace orc {
 
@@ -68,7 +70,6 @@ public:
   void emit(std::unique_ptr<MaterializationResponsibility> R,
             ThreadSafeModule TSM) override;
 
-  static const uint64_t CallCountThreshold = 10;
 
   /// Basic AddProfilerFunc that reoptimizes the function when the call count
   /// exceeds CallCountThreshold.
@@ -129,6 +130,7 @@ public:
     void reoptimizeSucceeded();
     void reoptimizeFailed();
 
+    SymbolFlagsMap Targets;
   private:
     std::mutex Mutex;
     ReOptMaterializationUnitID ID;

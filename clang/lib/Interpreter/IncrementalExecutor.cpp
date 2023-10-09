@@ -57,6 +57,8 @@
 #include "llvm/ExecutionEngine/Orc/ReOptimizeLayer.h"
 #include "llvm/IR/PassManager.h"
 
+#define DEBUG_TYPE "reopt"
+
 using namespace llvm;
 
 // Force linking some of the runtimes that helps attaching to a debugger.
@@ -168,8 +170,12 @@ std::unique_ptr<llvm::Module> CloneModuleToContext(llvm::Module& Src, LLVMContex
     return ClonedModule;
 }
 
+using namespace orc;
+
 auto EPC = cantFail(llvm::orc::SelfExecutorProcessControl::Create(
     std::make_shared<llvm::orc::SymbolStringPool>()));
+
+std::list<ResourceTrackerSP> KeepAlive;
 
 IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
                                          llvm::Error &Err,
@@ -185,11 +191,11 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
   // Enable debugging of JIT'd code (only works on JITLink for ELF and MachO).
   Builder.setEnableDebuggerSupport(true);
 
-  Builder.setObjectLinkingLayerCreator([&](llvm::orc::ExecutionSession &ES,
-                                                  const llvm::Triple &TT) {
-    auto L = std::make_unique<llvm::orc::ObjectLinkingLayer>(ES, ES.getExecutorProcessControl().getMemMgr());
-    return L;
-  });
+  /* Builder.setObjectLinkingLayerCreator([&](llvm::orc::ExecutionSession &ES, */
+  /*                                                 const llvm::Triple &TT) { */
+  /*   auto L = std::make_unique<llvm::orc::ObjectLinkingLayer>(ES, ES.getExecutorProcessControl().getMemMgr()); */
+  /*   return L; */
+  /* }); */
 
   Builder.setPlatformSetUp(llvm::orc::ExecutorNativePlatform("/home/sunho/dev/llvm-project/build/lib/clang/18/lib/x86_64-unknown-linux-gnu/liborc_rt.a"));
 
@@ -203,10 +209,11 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
   Jit->getReOptimizeLayer().setReoptimizeFunc(
       [&](ReOptimizeLayer &Parent, ReOptMaterializationUnitID MUID,
           unsigned CurVerison, ResourceTrackerSP OldRT, const std::vector<std::pair<uint32_t,uint64_t>>& Profile, ThreadSafeModule &TSM) {
+        KeepAlive.push_back(OldRT);
         TSM.withModuleDo([&](llvm::Module &M) {
-          dbgs() << "Optimizing ---------------" << "\n";
-          dbgs() << "before: " << "\n";
-          dbgs() << M << "\n";
+          LLVM_DEBUG({dbgs() << "Optimizing ---------------" << "\n";});
+          LLVM_DEBUG({dbgs() << "before: " << "\n";});
+          LLVM_DEBUG({dbgs() << M << "\n";});
 
           std::set<uint64_t> ToLink;
 
@@ -214,22 +221,27 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
     
           for (auto [CID, F] : Profile) {
             if (Parent.FuncAddrToMU.count(ExecutorAddr(F))) {
-              auto [MUID, Name] = Parent.FuncAddrToMU[ExecutorAddr(F)];
-              ToLink.insert(MUID);
-              ProfileData[CID].push_back(Name);
+              if (PGOOn) {
+                auto [MUID, Name] = Parent.FuncAddrToMU[ExecutorAddr(F)];
+                ToLink.insert(MUID);
+                ProfileData[CID].push_back(Name);
+              }
             } else {
               dbgs() << F << "\n";
-              assert(false);
             }
           }
 
-          for (auto MUID : ToLink) {
-            auto& State = Parent.getMaterializationUnitState(MUID);
+          for (auto ID : ToLink) {
+            if (MUID == ID) continue;
+            auto& State = Parent.getMaterializationUnitState(ID);
             State.getThreadSafeModule().withModuleDo([&](llvm::Module& NM) {
               auto NNM = CloneModuleToContext(NM, M.getContext());
               for (auto& F : *NNM) {
                 if (F.isDeclaration()) continue;
+                /* F.setLinkage(GlobalValue::WeakODRLinkage); */
+
                 F.setVisibility(GlobalValue::HiddenVisibility);
+                F.setLinkage(GlobalValue::PrivateLinkage);
               }
               Linker::linkModules(M, std::move(NNM));
             });
@@ -237,6 +249,13 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
 
           for (auto& F : M) {
             if (F.isDeclaration()) continue;
+            if (F.getLinkage() == GlobalValue::PrivateLinkage) continue;
+            if (F.getLinkage() == GlobalValue::LinkOnceODRLinkage) {
+              F.setLinkage(GlobalValue::WeakODRLinkage);
+            }
+            if (F.getLinkage() == GlobalValue::LinkOnceAnyLinkage) {
+              F.setLinkage(GlobalValue::WeakAnyLinkage);
+            }
             for (auto& B : F) {
               std::vector<CallInst*> Insts;
               for (auto& I : B) {
@@ -246,42 +265,65 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
                   }
                 }
               }
+              InlineFunctionInfo IFI;
               for (auto* Call : Insts) {
                 IRBuilder<> IRB(Call);
                 auto* a = Call->getMetadata("call_id");
                 if (!a) continue;
                 auto* VAM = cast<ValueAsMetadata>(cast<MDNode>(a)->getOperand(0));
                 int CallID = cast<ConstantInt>(VAM->getValue())->getSExtValue();
-                std::vector<std::pair<BasicBlock*, Value*>> Dones;
+                std::vector<std::pair<BasicBlock*, CallInst*>> Dones;
                 Instruction* IP = Call;
                 std::vector<Value*> Args(Call->arg_begin(), Call->arg_end());
                 for (auto Name : ProfileData[CallID]) {
-                  Value *Cmp = IRB.CreateICmpEQ(Call->getCalledOperand(), M.getFunction(Name));
+                  //if (M.getFunction(Name)->getFunctionType()->getNumParams() != Args.size()) continue;
+                  IRBuilder<> IRB(IP);
+                  auto* Cmp = IRB.CreateICmpEQ(Call->getCalledOperand(), M.getFunction(Name));
                   Instruction *IfPart, *ElsePart;
-                  SplitBlockAndInsertIfThenElse(Cmp, IP, &IfPart, &ElsePart);
+                  SplitBlockAndInsertIfThenElse(Cmp, &*IRB.GetInsertPoint(), &IfPart, &ElsePart);
+                  if (IP != Call) {
+                    auto* OldBB = cast<BasicBlock>(IfPart->getParent()->getTerminator()->getOperand(0));
+                    auto* Br = IfPart->getParent()->getTerminator();
+                    Br->setOperand(0, Call->getParent());
+                    auto* Br2 = ElsePart->getParent()->getTerminator();
+                    Br2->setOperand(0, Call->getParent());
+                    OldBB->eraseFromParent();
+                  }
                   IRBuilder<> Builder(IfPart);
                   CallInst* Res = Builder.CreateCall(M.getFunction(Name), Args);
-                  InlineFunctionInfo IFI;
-                  InlineFunction(*Res, IFI);
                   Dones.push_back({IfPart->getParent(), Res});
                   IP = ElsePart;
                 }
                 IRBuilder<> Builder(IP);
-                Builder.CreateCall(Call->getFunctionType(), Call->getCalledOperand(), Args);
+                assert(Call->getFunctionType()->getNumParams() == Args.size());
+                auto* Res = Builder.CreateCall(Call->getFunctionType(), Call->getCalledOperand(), Args);
+                Dones.push_back({ IP->getParent(), Res});
                 if (!Call->getFunctionType()->getReturnType()->isVoidTy()) {
-
+                  IRBuilder<> IRB2(Call);
+                  auto* Phi = IRB2.CreatePHI(Call->getFunctionType()->getReturnType(), Dones.size());
+                  for (auto [BB, V] : Dones) {
+                    Phi->addIncoming(V, BB);
+                  }
+                  Call->replaceAllUsesWith(Phi);
+                }
+                for (auto [BB, V] : Dones) {
+                  InlineFunction(*V, IFI);
                 }
                 Call->eraseFromParent();
+                //dbgs() << F << "\n";
               }
             }
           }
-          dbgs() << "inlined: " << "\n";
-          dbgs() << M << "\n";
+          LLVM_DEBUG({dbgs() << "Optimizing ---------------" << "\n";});
+          LLVM_DEBUG({dbgs() << "inlined: " << "\n";});
+          LLVM_DEBUG({dbgs() << M << "\n";});
 
           Optimize(nullptr, Jit->getTargetTriple(), M, "default<O2>");
 
-          dbgs() << "after: " << "\n";
-          dbgs() << M << "\n";
+          
+          LLVM_DEBUG({dbgs() << "Optimizing ---------------" << "\n";});
+          LLVM_DEBUG({dbgs() << "after: " << "\n";});
+          LLVM_DEBUG({dbgs() << M << "\n";});
 
         });
         return Error::success();
@@ -295,7 +337,10 @@ llvm::Error IncrementalExecutor::addModule(PartialTranslationUnit &PTU) {
       Jit->getMainJITDylib().createResourceTracker();
   ResourceTrackers[&PTU] = RT;
 
-  return Jit->addLazyIRModule(RT, {std::move(PTU.TheModule), TSCtx});
+  if (ReOptOn) {
+    return Jit->addLazyIRModule(RT, {std::move(PTU.TheModule), TSCtx});
+  }
+  return Jit->addIRModule(RT, {std::move(PTU.TheModule), TSCtx});
 }
 
 llvm::Error IncrementalExecutor::removeModule(PartialTranslationUnit &PTU) {

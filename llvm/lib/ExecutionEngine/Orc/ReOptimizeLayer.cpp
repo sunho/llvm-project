@@ -1,4 +1,10 @@
 #include "llvm/ExecutionEngine/Orc/ReOptimizeLayer.h"
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include <fstream>
+
+#define DEBUG_TYPE "reoptlayer"
+
+uint64_t CallCountThreshold = 1000;
 
 using namespace llvm;
 using namespace orc;
@@ -45,11 +51,8 @@ void ReOptimizeLayer::emit(std::unique_ptr<MaterializationResponsibility> R,
       HasNonCallable = true;
   }
 
+
   if (HasNonCallable) {
-    dbgs() << "Skipped" << "\n";
-    TSM.withModuleDo([&](Module& M) {
-      dbgs() << M << "\n";
-    });
     BaseLayer.emit(std::move(R), std::move(TSM));
     return;
   }
@@ -65,7 +68,7 @@ void ReOptimizeLayer::emit(std::unique_ptr<MaterializationResponsibility> R,
               if (Call->isIndirectCall()) {
                 LLVMContext& C = Call->getContext();
                 Type *I32Ty = Type::getInt32Ty(C);
-                Constant *One = ConstantInt::get(I32Ty, ID);
+                Constant *One = ConstantInt::get(I32Ty, ID++);
                 MDNode* N = MDNode::get(C, llvm::ValueAsMetadata::getConstant(One));
                 Call->setMetadata("call_id", N);
               }
@@ -76,7 +79,17 @@ void ReOptimizeLayer::emit(std::unique_ptr<MaterializationResponsibility> R,
     });
 
   auto &MUState = createMaterializationUnitState(TSM);
+  
+  MUState.Targets = R->getSymbols();
 
+  LLVM_DEBUG({
+    TSM.withModuleDo([&](Module& M) {
+      std::string filename = (Twine("dump/") + Twine(MUState.getID()) + ".ll").str();
+      std::error_code EC;
+      raw_fd_ostream file(filename, EC);
+      M.print(file, nullptr);
+    });
+  });
   if (auto Err = R->withResourceKeyDo([&](ResourceKey Key) {
         registerMaterializationUnitResource(Key, MUState);
       })) {
@@ -99,7 +112,6 @@ void ReOptimizeLayer::emit(std::unique_ptr<MaterializationResponsibility> R,
     R->failMaterialization();
     return;
   }
-
   RSManager.emitRedirectableSymbols(std::move(R), *InitialDests);
 
   SymbolLookupSet LookupSymbols;
@@ -129,7 +141,6 @@ Error ReOptimizeLayer::reoptimizeIfCallFrequent(ReOptimizeLayer &Parent,
     GlobalVariable *Counter = new GlobalVariable(
         M, I64Ty, false, GlobalValue::InternalLinkage,
         Constant::getNullValue(I64Ty), "__orc_reopt_counter");
-    dbgs() << "Adding instrumentation" << "\n";
     for (auto &F : M) {
       if (F.isDeclaration())
         continue;
@@ -145,19 +156,22 @@ Error ReOptimizeLayer::reoptimizeIfCallFrequent(ReOptimizeLayer &Parent,
       Instruction *SplitTerminator = SplitBlockAndInsertIfThen(Cmp, IP, false);
       createReoptimizeCall(M, *SplitTerminator, MUID, CurVersion);
 
-      for (auto &B : F) {
-        for (auto& I : B) {
-          if (auto* Call = dyn_cast<llvm::CallInst>(&I)) {
-            if (Call->isIndirectCall()) {
-                auto* VAM = cast<ValueAsMetadata>(dyn_cast<MDNode>(Call->getMetadata("call_id"))->getOperand(0));
+      if (PGOOn) {
+        for (auto &B : F) {
+          for (auto& I : B) {
+            if (auto* Call = dyn_cast<llvm::CallInst>(&I)) {
+              if (Call->isIndirectCall()) {
+                auto *a = Call->getMetadata("call_id");
+                if (!a) continue;
+                auto* VAM = cast<ValueAsMetadata>(dyn_cast<MDNode>(a)->getOperand(0));
                 int CallID = dyn_cast<ConstantInt>(VAM->getValue())->getSExtValue();
                 createFucnCountCall(M, I, MUID, CallID, Call->getCalledOperand());
+              }
             }
           }
         }
       }
     }
-    dbgs() << M << "\n";
     return Error::success();
   });
 }
@@ -191,6 +205,13 @@ ReOptimizeLayer::emitMUImplSymbols(ReOptMaterializationUnitState &MUState,
   for (auto [K, V] : RenamedMap)
     LookupSymbols.add(V);
 
+  for (auto [K,V] : MUState.Targets) {
+    if (!RenamedMap.count(K)) {
+      assert(false);
+    }
+  }
+
+
   auto ImplSymbols =
       ES.lookup({{&JD, JITDylibLookupFlags::MatchAllSymbols}}, LookupSymbols,
                 LookupKind::Static, SymbolState::Resolved);
@@ -217,8 +238,11 @@ void ReOptimizeLayer::rt_reoptimize(SendErrorFn SendResult,
   }
 
   ThreadSafeModule TSM = cloneToNewContext(MUState.getThreadSafeModule());
-  TSM.withModuleDo([&](Module& M) {
-    dbgs() << "Reoptimization requested for" << M.getName() << "\n";
+
+  LLVM_DEBUG({
+    TSM.withModuleDo([&](Module& M) {
+      dbgs() << "Reoptimization requested for" << MUID << "(" << M.getName() << ")" << "\n";
+    });
   });
 
   auto OldRT = MUState.getResourceTracker();
@@ -230,6 +254,16 @@ void ReOptimizeLayer::rt_reoptimize(SendErrorFn SendResult,
     SendResult(Error::success());
     return;
   }
+
+  LLVM_DEBUG({
+    TSM.withModuleDo([&](Module& M) {
+      std::string filename = (Twine("dump/") + Twine(MUID)).str() + ".opt.ll";
+      std::error_code EC;
+      raw_fd_ostream file(filename, EC);
+      M.print(file, nullptr);
+    });
+  });
+
 
   auto SymbolDests =
       emitMUImplSymbols(MUState, CurVersion + 1, JD, std::move(TSM));

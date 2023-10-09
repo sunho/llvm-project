@@ -8,6 +8,7 @@
 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/JITLink/EHFrameSupport.h"
+#include "llvm/ExecutionEngine/Orc/MapperJITLinkMemoryManager.h"
 #include "llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h"
 #include "llvm/ExecutionEngine/Orc/COFFPlatform.h"
 #include "llvm/ExecutionEngine/Orc/DebugObjectManagerPlugin.h"
@@ -29,6 +30,10 @@
 #include "llvm/IR/Mangler.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/DynamicLibrary.h"
+
+bool ReOptOn = true;
+bool PGOOn = true;
+bool InlineOn = true;
 
 #include <map>
 
@@ -668,6 +673,20 @@ void LLJIT::PlatformSupport::setInitTransform(
 
 LLJIT::PlatformSupport::~PlatformSupport() = default;
 
+
+static std::unique_ptr<jitlink::JITLinkMemoryManager> createInProcessMemoryManager() {
+  uint64_t SlabSize;
+#ifdef _WIN32
+  SlabSize = 1024 * 1024;
+#else
+  SlabSize = 1024 * 1024 * 1024;
+#endif
+
+  // Otherwise use the standard in-process mapper.
+  return cantFail(
+      MapperJITLinkMemoryManager::CreateWithMapper<InProcessMemoryMapper>(
+          SlabSize));
+}
 Error LLJITBuilderState::prepareForConstruction() {
 
   LLVM_DEBUG(dbgs() << "Preparing to create LLJIT instance...\n");
@@ -721,7 +740,7 @@ Error LLJITBuilderState::prepareForConstruction() {
       dbgs() << "ExecutorProcessControl not specified, "
                 "Creating SelfExecutorProcessControl instance\n";
     });
-    if (auto EPCOrErr = SelfExecutorProcessControl::Create())
+    if (auto EPCOrErr = SelfExecutorProcessControl::Create(nullptr, nullptr, createInProcessMemoryManager()))
       EPC = std::move(*EPCOrErr);
     else
       return EPCOrErr.takeError();
@@ -768,7 +787,7 @@ Error LLJITBuilderState::prepareForConstruction() {
       CreateObjectLinkingLayer =
           [](ExecutionSession &ES,
              const Triple &) -> Expected<std::unique_ptr<ObjectLayer>> {
-        auto ObjLinkingLayer = std::make_unique<ObjectLinkingLayer>(ES);
+        auto ObjLinkingLayer = std::make_unique<ObjectLinkingLayer>(ES, ES.getExecutorProcessControl().getMemMgr());
         if (auto EHFrameRegistrar = EPCEHFrameRegistrar::Create(ES))
           ObjLinkingLayer->addPlugin(
               std::make_unique<EHFrameRegistrationPlugin>(
@@ -1299,7 +1318,7 @@ LLLazyJIT::LLLazyJIT(LLLazyJITBuilderState &S, Error &Err) : LLJIT(S, Err) {
     return;
   }
 
-  RSManager = cantFail(JITLinkRedirectableSymbolManager::Create(*ES, *dyn_cast<ObjectLinkingLayer>(&getObjLinkingLayer()), getMainJITDylib()));
+  RSManager = cantFail(RewriteRedirectableSymbolManager::Create(*ES, *dyn_cast<ObjectLinkingLayer>(&getObjLinkingLayer()), getMainJITDylib()));
 
   ROLayer = std::make_unique<ReOptimizeLayer>(*ES, *InitHelperTransformLayer, *RSManager);
 
@@ -1307,6 +1326,8 @@ LLLazyJIT::LLLazyJIT(LLLazyJITBuilderState &S, Error &Err) : LLJIT(S, Err) {
 
   // Create the IP Layer.
   IPLayer = std::make_unique<IRPartitionLayer>(*ES, *ROLayer);
+
+  IPLayer->setPartitionFunction(IRPartitionLayer::compileRequested);
 
   // Create the COD layer.
   CODLayer = std::make_unique<CompileOnDemandLayer>(*ES, *IPLayer, *LCTMgr,

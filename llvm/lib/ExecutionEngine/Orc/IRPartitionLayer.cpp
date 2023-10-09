@@ -9,6 +9,7 @@
 #include "llvm/ExecutionEngine/Orc/IRPartitionLayer.h"
 #include "llvm/ExecutionEngine/Orc/ExecutionUtils.h"
 #include "llvm/ExecutionEngine/Orc/IndirectionUtils.h"
+#include "llvm/ExecutionEngine/Orc/LLJIT.h"
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -24,9 +25,14 @@ static ThreadSafeModule extractSubModule(ThreadSafeModule &TSM,
     // Delete the definition in the source module.
     if (isa<Function>(GV)) {
       auto &F = cast<Function>(GV);
-      F.deleteBody();
-      F.setPersonalityFn(nullptr);
+      if (InlineOn) {
+        F.setLinkage(GlobalValue::AvailableExternallyLinkage);
+      } else {
+        F.deleteBody();
+        F.setPersonalityFn(nullptr);
+      }
     } else if (isa<GlobalVariable>(GV)) {
+      //cast<GlobalVariable>(GV).setInitializer(nullptr);
       cast<GlobalVariable>(GV).setInitializer(nullptr);
     } else if (isa<GlobalAlias>(GV)) {
       // We need to turn deleted aliases into function or variable decls based

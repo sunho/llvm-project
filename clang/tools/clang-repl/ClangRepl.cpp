@@ -17,12 +17,14 @@
 #include "clang/Interpreter/Interpreter.h"
 
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/ExecutionEngine/Orc/ReOptimizeLayer.h"
 #include "llvm/LineEditor/LineEditor.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ManagedStatic.h" // llvm_shutdown
 #include "llvm/Support/Signals.h"
 #include "llvm/Support/TargetSelect.h"
 #include <optional>
+#include <fstream>
 
 static llvm::cl::opt<bool> CudaEnabled("cuda", llvm::cl::Hidden);
 static llvm::cl::opt<std::string> CudaPath("cuda-path", llvm::cl::Hidden);
@@ -36,6 +38,11 @@ static llvm::cl::opt<bool> OptHostSupportsJit("host-supports-jit",
                                               llvm::cl::Hidden);
 static llvm::cl::list<std::string> OptInputs(llvm::cl::Positional,
                                              llvm::cl::desc("[code to run]"));
+static llvm::cl::list<std::string> OptFile("file", llvm::cl::Hidden);
+static llvm::cl::opt<bool> OptReOptOff("reopt-off", llvm::cl::Hidden);
+static llvm::cl::opt<bool> OptPGOOff("pgo-off", llvm::cl::Hidden);
+static llvm::cl::opt<bool> OptInlineOn("inline-on", llvm::cl::Hidden);
+static llvm::cl::opt<int> OptCallCount("callcnt", llvm::cl::Hidden, llvm::cl::init(10));
 
 static void LLVMErrorHandler(void *UserData, const char *Message,
                              bool GenCrashDiag) {
@@ -135,8 +142,12 @@ ReplListCompleter::operator()(llvm::StringRef Buffer, size_t Pos,
   return Comps;
 }
 
+#include <filesystem>
+
 llvm::ExitOnError ExitOnErr;
 int main(int argc, const char **argv) {
+  std::filesystem::remove_all("dump");
+  std::filesystem::create_directory("dump");
   ExitOnErr.setBanner("clang-repl: ");
   llvm::cl::ParseCommandLineOptions(argc, argv);
 
@@ -150,6 +161,7 @@ int main(int argc, const char **argv) {
   llvm::InitializeAllTargets();
   llvm::InitializeAllTargetMCs();
   llvm::InitializeAllAsmPrinters();
+  llvm::InitializeAllAsmParsers();
 
   if (OptHostSupportsJit) {
     auto J = llvm::orc::LLJITBuilder()
@@ -216,6 +228,19 @@ int main(int argc, const char **argv) {
 
   for (const std::string &input : OptInputs) {
     if (auto Err = Interp->ParseAndExecute(input))
+      llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
+  }
+
+  ReOptOn = !OptReOptOff;
+  PGOOn = !OptPGOOff;
+  InlineOn = OptInlineOn;
+  CallCountThreshold = OptCallCount;
+
+  for (auto filename : OptFile) {
+    std::ifstream f(filename, std::ios::in);
+    std::string str((std::istreambuf_iterator<char>(f)),
+                 std::istreambuf_iterator<char>());
+    if (auto Err = Interp->ParseAndExecute(str))
       llvm::logAllUnhandledErrors(std::move(Err), llvm::errs(), "error: ");
   }
 

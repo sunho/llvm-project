@@ -26,6 +26,10 @@
 #include "llvm/Support/ThreadPool.h"
 #include <variant>
 
+extern bool ReOptOn;
+extern bool PGOOn;
+extern bool InlineOn;
+
 namespace llvm {
 namespace orc {
 

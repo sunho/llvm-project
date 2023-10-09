@@ -126,6 +126,7 @@ CreateCI(const llvm::opt::ArgStringList &Argv) {
 
   Clang->getFrontendOpts().DisableFree = false;
   Clang->getCodeGenOpts().DisableFree = false;
+  Clang->getCodeGenOpts().setInlining(clang::CodeGenOptions::NormalInlining);
   return std::move(Clang);
 }
 

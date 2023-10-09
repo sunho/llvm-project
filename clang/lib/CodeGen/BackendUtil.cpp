@@ -912,7 +912,7 @@ void EmitAssemblyHelper::RunOptimizationPipeline(
   // preset TLI.
   std::unique_ptr<TargetLibraryInfoImpl> TLII(
       createTLII(TargetTriple, CodeGenOpts));
-  FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
+  //FAM.registerPass([&] { return TargetLibraryAnalysis(*TLII); });
 
   // Register all the basic analyses with the managers.
   PB.registerModuleAnalyses(MAM);
@@ -1150,6 +1150,7 @@ void EmitAssemblyHelper::RunCodegenPipeline(
     PrettyStackTraceString CrashInfo("Code generation");
     llvm::TimeTraceScope TimeScope("CodeGenPasses");
     CodeGenPasses.run(*TheModule);
+    dbgs() << "FUCK" << "\n";
   }
 }
 

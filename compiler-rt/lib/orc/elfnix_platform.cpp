@@ -86,6 +86,7 @@ struct TLSDescriptor {
 using CallCountMap = std::unordered_map<uint64_t, size_t>;
 using MUProfileMap = std::unordered_map<uint32_t, CallCountMap>;
 std::unordered_map<uint64_t, MUProfileMap> CallProfiles;
+std::unordered_map<uint64_t, int> done;
 
 using ReoptimizeParam = SPSSequence<SPSTuple<uint32_t, uint64_t>>;
 
@@ -93,7 +94,6 @@ std::vector<std::pair<uint32_t, uint64_t>> SerealizeProfile(uint64_t MUID) {
   std::vector<std::pair<uint32_t, uint64_t>> Res;
   for (auto& [CallID, CountMap] : CallProfiles[MUID]) {
     for (auto [FuncPtr, _ ] : CountMap) {
-      std::cout << "EECHIII:" << FuncPtr << "\n";
       Res.push_back({CallID, FuncPtr});
     }
   }
@@ -430,8 +430,6 @@ ELFNixPlatformRuntimeState::dlopenInitialize(std::string_view Path, int Mode) {
   for (auto &MOJDIs : *InitSeq)
     if (auto Err = initializeJITDylib(MOJDIs))
       return std::move(Err);
-
-  printf("ok\n");
 
   // Return the header for the last item in the list.
   auto *JDS = getJITDylibStateByHeaderAddr(

@@ -56,6 +56,9 @@ JITTargetMachineBuilder::createTargetMachine() {
     return make_error<StringError>("Could not allocate target machine",
                                    inconvertibleErrorCode());
 
+   TM->setOptLevel(CodeGenOptLevel::Default);
+  /*   TM->setFastISel(true); */
+  /**/
   return std::unique_ptr<TargetMachine>(TM);
 }
 
