@@ -1,38 +1,38 @@
 class Worker {\
 public:\
-  virtual int rate() = 0;\
+  virtual int wage() = 0;\
 };
 
 class Alice : public Worker {\
 public:\
-  int rate() override {\
+  int wage() override {\
     return 42;\
   }\
 };
 
 class Bob : public Worker {\
 public:\
-  int rate() override {\
+  int wage() override {\
     return 1;\
   }\
 };
 
 Worker* workers[2] = {new Alice, new Bob};
 
-int process_order(int order_num) {\
+int get_cost_of_order(int order_num) {\
   if (order_num&1) {\
-    return workers[0]->rate();\
+    return workers[0]->wage();\
   } else {\
-    return workers[1]->rate();\
+    return workers[1]->wage();\
   }\
 }
 
-int run() {\
+int calculate_cost() {\
   int total_cost = 0;\
   for (int i=0;i<100;i++) {\
-    total_cost += process_order(i);\
+    total_cost += get_cost_of_order(i);\
   }\
   return total_cost;\
 }
 
-run();
+calculate_cost();

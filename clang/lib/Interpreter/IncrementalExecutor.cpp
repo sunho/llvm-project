@@ -238,10 +238,8 @@ IncrementalExecutor::IncrementalExecutor(llvm::orc::ThreadSafeContext &TSC,
               auto NNM = CloneModuleToContext(NM, M.getContext());
               for (auto& F : *NNM) {
                 if (F.isDeclaration()) continue;
-                /* F.setLinkage(GlobalValue::WeakODRLinkage); */
-
                 F.setVisibility(GlobalValue::HiddenVisibility);
-                F.setLinkage(GlobalValue::PrivateLinkage);
+                F.setLinkage(GlobalValue::WeakODRLinkage);
               }
               Linker::linkModules(M, std::move(NNM));
             });
